@@ -1,4 +1,4 @@
-from whoosh.index import create_in
+from whoosh.index import create_in, open_dir
 from whoosh.fields import Schema, TEXT
 from whoosh.qparser import QueryParser
 import os
@@ -7,7 +7,15 @@ class KeywordSearch:
     def __init__(self):
         schema = Schema(content=TEXT(stored=True))
         os.makedirs("indexdir", exist_ok=True)
-        self.ix = create_in("indexdir", schema)
+        # Open existing index if present, otherwise create a new one
+        try:
+            if os.listdir("indexdir"):
+                self.ix = open_dir("indexdir")
+            else:
+                self.ix = create_in("indexdir", schema)
+        except Exception:
+            # fallback to create
+            self.ix = create_in("indexdir", schema)
 
     def add_docs(self, texts):
         writer = self.ix.writer()

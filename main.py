@@ -3,7 +3,7 @@ from processing.cleaner import clean_text
 from processing.chunker import chunk_text
 from rag.pipeline import RAGPipeline
 
-file_path = "data/raw/sample.pdf"
+file_path = "data/raw/45.pdf"
 
 text = extract_text_from_pdf(file_path)
 text = clean_text(text)
