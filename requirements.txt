@@ -1,0 +1,16 @@
+pymupdf
+pytesseract
+pillow
+opencv-python
+numpy
+pandas
+
+sentence-transformers
+faiss-cpu
+
+whoosh
+
+fastapi
+uvicorn
+
+python-dotenv
