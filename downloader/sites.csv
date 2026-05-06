@@ -1,0 +1,2 @@
+name,type,enabled,notes
+mavat,mavat,true,Israel Planning Authority - mavat.iplan.gov.il (searches plans by gush/helka via ArcGIS REST)

@@ -1,5 +1,6 @@
 from pathlib import Path
 import sys
+import logging
 from fastapi import FastAPI
 from pydantic import BaseModel
 from fastapi.responses import HTMLResponse
@@ -7,9 +8,13 @@ from fastapi.staticfiles import StaticFiles
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from rag.pipeline import RAGPipeline
+from downloader.manager import DownloadManager
+
+logging.basicConfig(level=logging.INFO)
 
 app = FastAPI()
 rag = RAGPipeline()
+download_manager = DownloadManager()
 
 # serve static JS from api/static
 static_dir = Path(__file__).resolve().parent / "static"
@@ -44,6 +49,23 @@ def query(q: str):
 
 class QueryRequest(BaseModel):
     q: str
+
+
+class DownloadRequest(BaseModel):
+    gush: str
+    helka: str
+
+
+@app.post("/download")
+def download_and_index(req: DownloadRequest):
+    print(f"[server] POST /download gush={req.gush!r} helka={req.helka!r}")
+    downloaded = download_manager.download(req.gush, req.helka)
+    if not downloaded:
+        return {"downloaded": [], "indexed_chunks": 0, "message": "No new files found"}
+    indexed = rag.index_new_files(downloaded)
+    names = [p.name for p in downloaded]
+    print(f"[server] download: {len(names)} file(s) downloaded, {indexed} chunks indexed")
+    return {"downloaded": names, "indexed_chunks": indexed}
 
 
 @app.post("/query")
@@ -82,19 +104,37 @@ def home():
             #response { direction: rtl; text-align: right; }
             /* question box also set to RTL for Hebrew input */
             #question { direction: rtl; text-align: right; }
+            .section { border: 1px solid #ccc; border-radius: 6px; padding: 16px; max-width: 820px; margin-bottom: 24px; }
+            .section h2 { margin-top: 0; }
+            input[type=text] { padding: 6px 10px; font-size: 1em; width: 120px; }
+            #download-status { direction: rtl; text-align: right; margin-top: 10px; color: #333; }
         </style>
     </head>
     <body>
         <h1>RAG Query</h1>
-        <label for="question">Question</label>
-        <br />
-        <textarea id="question" rows="4" placeholder="Enter your question here..."></textarea>
-        <br />
-        <button id="send">Send</button>
 
-        <h2>Response</h2>
-        <textarea id="response" rows="4" readonly placeholder="Response will appear here..." dir="rtl"></textarea>
-        <div id="results" style="margin-top:12px;"></div>
+        <div class="section">
+            <h2>הורדת מסמכים לפי גוש/חלקה</h2>
+            <label>גוש: <input type="text" id="gush" placeholder="לדוגמה: 6645" dir="rtl" /></label>
+            &nbsp;
+            <label>חלקה: <input type="text" id="helka" placeholder="לדוגמה: 10" dir="rtl" /></label>
+            &nbsp;
+            <button id="download-btn">הורד ואנדקס</button>
+            <div id="download-status"></div>
+        </div>
+
+        <div class="section">
+            <h2>שאילתה</h2>
+            <label for="question">שאלה</label>
+            <br />
+            <textarea id="question" rows="4" placeholder="הכנס שאלה כאן..." dir="rtl"></textarea>
+            <br />
+            <button id="send">שלח</button>
+
+            <h3>תוצאות</h3>
+            <textarea id="response" rows="4" readonly placeholder="התשובה תופיע כאן..." dir="rtl"></textarea>
+            <div id="results" style="margin-top:12px;"></div>
+        </div>
 
         <script src="/static/app.js"></script>
     </body>
