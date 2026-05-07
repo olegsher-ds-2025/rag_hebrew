@@ -9,14 +9,13 @@ class BaseDownloader(ABC):
     """
 
     @abstractmethod
-    def download(self, gush: str, helka: str, dest_dir: Path) -> list[Path]:
+    def download(self, plan_name: str, dest_dir: Path) -> list[Path]:
         """
-        Download all documents matching the given gush/helka from this site.
+        Download all documents matching the given plan name (שם תכנית) from this site.
 
         Args:
-            gush:     Block number (גוש)
-            helka:    Parcel number (חלקה)
-            dest_dir: Directory to save downloaded files into
+            plan_name: Plan name to search for (שם תכנית), e.g. "נוף הפארק - יובלים גנים"
+            dest_dir:  Directory to save downloaded files into
 
         Returns:
             List of paths of successfully downloaded files.

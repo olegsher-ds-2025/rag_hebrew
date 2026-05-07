@@ -3,33 +3,38 @@ document.addEventListener('DOMContentLoaded', () => {
   const downloadBtn = document.getElementById('download-btn');
   if (downloadBtn) {
     downloadBtn.addEventListener('click', async () => {
-      const gush = document.getElementById('gush').value.trim();
-      const helka = document.getElementById('helka').value.trim();
+      const planNameEl = document.getElementById('plan-name');
       const statusDiv = document.getElementById('download-status');
-      if (!gush || !helka) {
-        statusDiv.textContent = 'יש להזין גוש וחלקה';
+      if (!planNameEl || !statusDiv) {
+        console.error('Download UI elements not found — please restart the server to reload the HTML.');
         return;
       }
-      statusDiv.textContent = 'מוריד ומאנדקס...';
+      const planName = planNameEl.value.trim();
+      if (!planName) {
+        statusDiv.style.display = 'block';
+        statusDiv.textContent = 'יש להזין שם תכנית';
+        return;
+      }
+      statusDiv.style.display = 'block';
+      statusDiv.textContent = '⏳ מחפש תכניות...';
       downloadBtn.disabled = true;
       try {
         const res = await fetch('/download', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ gush, helka })
+          body: JSON.stringify({ plan_name: planName })
         });
         if (!res.ok) throw new Error('HTTP ' + res.status);
         const data = await res.json();
+        const log = (data.log || []).join('\n');
         if (data.downloaded && data.downloaded.length > 0) {
-          statusDiv.innerHTML =
-            `הורדו ${data.downloaded.length} קבצים, אונדקסו ${data.indexed_chunks} קטעים.<br>` +
-            data.downloaded.map(f => `• ${f}`).join('<br>');
+          statusDiv.textContent = log + `\n\n✅ הורדו ${data.downloaded.length} קבצים, אונדקסו ${data.indexed_chunks} קטעים.`;
         } else {
-          statusDiv.textContent = data.message || 'לא נמצאו קבצים חדשים';
+          statusDiv.textContent = log || 'לא נמצאו קבצים חדשים';
         }
       } catch (err) {
         console.error('Download error', err);
-        statusDiv.textContent = 'שגיאה: ' + err;
+        statusDiv.textContent = '❌ שגיאה: ' + err;
       } finally {
         downloadBtn.disabled = false;
       }
@@ -41,42 +46,54 @@ document.addEventListener('DOMContentLoaded', () => {
   if (!sendBtn) return;
 
   sendBtn.addEventListener('click', async () => {
-    const q = document.getElementById('question').value;
-    const respArea = document.getElementById('response');
+    const q = document.getElementById('question').value.trim();
+    const answerBox = document.getElementById('answer-box');
     const resultsDiv = document.getElementById('results');
-    console.log('Sending query:', q);
-    if (respArea) respArea.value = 'Loading...';
-    if (resultsDiv) resultsDiv.innerHTML = 'Loading...';
+    const sourcesDetails = document.getElementById('sources-details');
+    const sourcesCount = document.getElementById('sources-count');
+
+    if (!q) return;
+
+    answerBox.style.display = 'block';
+    answerBox.textContent = '⏳ מחפש ומנתח...';
+    if (sourcesDetails) sourcesDetails.style.display = 'none';
+
     try {
       const res = await fetch('/query', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ q })
       });
-      console.log('HTTP status', res.status);
       if (!res.ok) throw new Error('HTTP ' + res.status);
       const data = await res.json();
-      console.log('Response data', data);
-      if (!data.results || data.results.length === 0) {
-        if (respArea) respArea.value = 'No results';
-        if (resultsDiv) resultsDiv.innerHTML = '<i>No results</i>';
+
+      // Show generated answer
+      if (data.answer) {
+        answerBox.innerHTML = '<strong>תשובה:</strong>\n' + data.answer.replace(/</g, '&lt;');
+      } else if (!data.results || data.results.length === 0) {
+        answerBox.textContent = 'לא נמצאו תוצאות';
       } else {
-        // render results list with optional download link
+        answerBox.style.display = 'none';
+      }
+
+      // Show source chunks in collapsible section
+      if (data.results && data.results.length > 0) {
+        const uniqueSources = [...new Set(data.results.filter(r => r.source).map(r => r.source))];
         const html = data.results.map((r, i) => {
-          const idx = i+1;
           const text = (r.text || '').replace(/</g, '&lt;');
-          if (r.source) {
-            return `<div style="margin-bottom:12px; direction: rtl; text-align: right;"><strong>${idx}.</strong> <a href="${r.source}" target="_blank" rel="noopener">[open]</a><div>${text}</div></div>`;
-          } else {
-            return `<div style="margin-bottom:12px; direction: rtl; text-align: right;"><strong>${idx}.</strong> <div>${text}</div></div>`;
-          }
+          const link = r.source
+            ? `<a href="${r.source}" target="_blank" rel="noopener" style="font-size:0.85em;">[פתח מסמך]</a> `
+            : '';
+          return `<div style="margin-bottom:10px;padding:8px;background:#fafafa;border-radius:4px;direction:rtl;text-align:right;font-size:0.9em;">${link}${text}</div>`;
         }).join('');
-        if (respArea) respArea.value = data.results.map((r,i)=> `${i+1}. ${r.text || r}`).join('\n\n');
         if (resultsDiv) resultsDiv.innerHTML = html;
+        if (sourcesCount) sourcesCount.textContent = data.results.length;
+        if (sourcesDetails) sourcesDetails.style.display = 'block';
       }
     } catch (err) {
       console.error('Query error', err);
-      respArea.value = 'Error: ' + err;
+      answerBox.style.display = 'block';
+      answerBox.textContent = '❌ שגיאה: ' + err;
     }
   });
 });

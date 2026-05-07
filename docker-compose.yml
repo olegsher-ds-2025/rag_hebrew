@@ -7,6 +7,7 @@ services:
     volumes:
       - ./data:/app/data
       - ./vector_store:/app/vector_store
+      - ./indexdir:/app/indexdir
     restart: unless-stopped
     environment:
       - PYTHONUNBUFFERED=1

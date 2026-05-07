@@ -2,68 +2,98 @@
 Downloader for mavat.iplan.gov.il (Israel Planning Authority).
 
 Flow:
-  1. Query the public ArcGIS REST service to find plan IDs that cover the given
-     gush/helka.
+  1. Query the public ArcGIS REST service to find plan IDs matching the given
+     plan name (שם תכנית) using a LIKE search on the pl_name field.
   2. For each plan, call the mavat document-list API to get all attached PDF docs.
   3. Download each PDF into dest_dir, skipping files that already exist.
+
+Progress messages are accumulated in self.log (list[str]) during each download() call.
 """
 
+import ssl
 import requests
 import logging
 from pathlib import Path
-from urllib.parse import urljoin
+from requests.adapters import HTTPAdapter
+from urllib3.util.ssl_ import create_urllib3_context
 
 from downloader.base_downloader import BaseDownloader
 
 logger = logging.getLogger(__name__)
 
-# ArcGIS REST service – layer 1 contains approved/deposited plans indexed by parcel
+# ArcGIS REST service – layer 1 contains approved/deposited plans indexed by plan name
 PLANS_QUERY_URL = (
     "https://ags.iplan.gov.il/arcgisiplan/rest/services/"
     "PlanningPublic/Xplan/MapServer/1/query"
 )
 
-# mavat API – returns document metadata for a given plan number
-MAVAT_DOCS_URL = "https://mavat.iplan.gov.il/SV4/1/{plan_number}"
-
-# mavat API endpoint that returns the JSON document list for a plan
-MAVAT_API_DOCS = "https://mavat.iplan.gov.il/api/documents/{plan_number}"
-
-# Direct PDF download URL pattern served by the mavat document viewer
-MAVAT_PDF_URL = "https://mavat.iplan.gov.il/SV4/1/{plan_number}/{doc_id}"
+# mavat REST API base (may be under maintenance)
+MAVAT_REST_BASE = "https://mavat.iplan.gov.il/rest/api"
 
 REQUEST_TIMEOUT = 30  # seconds
 
 
+class _LegacySSLAdapter(HTTPAdapter):
+    """HTTPAdapter that lowers TLS cipher security level to connect to older government servers."""
+
+    def init_poolmanager(self, *args, **kwargs):
+        ctx = create_urllib3_context()
+        ctx.set_ciphers("DEFAULT:@SECLEVEL=1")
+        ctx.check_hostname = False
+        ctx.verify_mode = ssl.CERT_NONE
+        kwargs["ssl_context"] = ctx
+        super().init_poolmanager(*args, **kwargs)
+
+
 class MavatDownloader(BaseDownloader):
-    """Download planning documents from mavat.iplan.gov.il by גוש/חלקה."""
+    """Download planning documents from mavat.iplan.gov.il by שם תכנית (plan name)."""
 
     def __init__(self):
         self.session = requests.Session()
         self.session.headers.update({
             "User-Agent": "Mozilla/5.0 (compatible; HebrewRAG/1.0)"
         })
+        adapter = _LegacySSLAdapter()
+        self.session.mount("https://", adapter)
+        self.log: list[str] = []
+
+    def _emit(self, msg: str) -> None:
+        logger.info("mavat: %s", msg)
+        self.log.append(msg)
 
     # ------------------------------------------------------------------
     # Public interface
     # ------------------------------------------------------------------
 
-    def download(self, gush: str, helka: str, dest_dir: Path) -> list[Path]:
+    def download(self, plan_name: str, dest_dir: Path) -> list[Path]:
+        self.log = []
         dest_dir.mkdir(parents=True, exist_ok=True)
 
-        plan_numbers = self._search_plans(gush, helka)
-        if not plan_numbers:
-            logger.warning("mavat: no plans found for gush=%s helka=%s", gush, helka)
+        self._emit(f"מחפש תכניות עבור: {plan_name}")
+        plans = self._search_plans(plan_name)
+        if not plans:
+            self._emit("לא נמצאו תכניות מתאימות")
             return []
 
+        self._emit(f"נמצאו {len(plans)} תכנית/ות:")
+        for p in plans:
+            self._emit(f"  • {p['pl_number']} — {p['pl_name']}  ({p['pl_url']})")
+
         downloaded: list[Path] = []
-        for plan_num in plan_numbers:
-            logger.info("mavat: fetching documents for plan %s", plan_num)
-            docs = self._get_document_list(plan_num)
+        for plan in plans:
+            plan_num = plan["pl_number"]
+            self._emit(f"מאחזר מסמכים לתכנית {plan_num}")
+            docs = self._get_document_list(plan_num, plan["pl_url"])
+            if not docs:
+                self._emit(f"  לא נמצאו מסמכים להורדה — ניתן לצפות בתכנית ב: {plan['pl_url']}")
+                continue
             for doc_id, filename in docs:
                 path = self._download_pdf(plan_num, doc_id, filename, dest_dir)
                 if path:
+                    self._emit(f"  ✓ הורד: {path.name}")
                     downloaded.append(path)
+                else:
+                    self._emit(f"  ✗ כשל בהורדת: {filename}")
 
         return downloaded
 
@@ -71,10 +101,12 @@ class MavatDownloader(BaseDownloader):
     # Step 1: find plan numbers via ArcGIS REST
     # ------------------------------------------------------------------
 
-    def _search_plans(self, gush: str, helka: str) -> list[str]:
+    def _search_plans(self, plan_name: str) -> list[dict]:
+        """Return list of dicts with pl_number, pl_name, pl_url."""
+        safe_name = plan_name.replace("'", "''")
         params = {
-            "where": f"GUSH_NUM={gush} AND PARCEL_NUM={helka}",
-            "outFields": "PL_NUMBER",
+            "where": f"pl_name LIKE '%{safe_name}%'",
+            "outFields": "pl_number,pl_name,pl_url",
             "returnDistinctValues": "true",
             "returnGeometry": "false",
             "f": "json",
@@ -84,41 +116,37 @@ class MavatDownloader(BaseDownloader):
             resp.raise_for_status()
             data = resp.json()
         except Exception as exc:
-            logger.error("mavat: ArcGIS query failed: %s", exc)
+            self._emit(f"שגיאה בחיפוש ArcGIS: {exc}")
             return []
 
-        features = data.get("features", [])
-        plan_numbers = []
-        for feat in features:
+        results = []
+        for feat in data.get("features", []):
             attrs = feat.get("attributes", {})
-            pl = attrs.get("PL_NUMBER") or attrs.get("pl_number")
-            if pl:
-                plan_numbers.append(str(pl).strip())
-
-        logger.info("mavat: found %d plan(s) for gush=%s helka=%s", len(plan_numbers), gush, helka)
-        return plan_numbers
+            pl_num = attrs.get("pl_number") or attrs.get("PL_NUMBER")
+            if pl_num:
+                results.append({
+                    "pl_number": str(pl_num).strip(),
+                    "pl_name": attrs.get("pl_name") or attrs.get("PL_NAME") or "",
+                    "pl_url": attrs.get("pl_url") or attrs.get("PL_URL") or "",
+                })
+        return results
 
     # ------------------------------------------------------------------
     # Step 2: get document list for a plan
     # ------------------------------------------------------------------
 
-    def _get_document_list(self, plan_number: str) -> list[tuple[str, str]]:
+    def _get_document_list(self, plan_number: str, pl_url: str) -> list[tuple[str, str]]:
         """Return list of (doc_id, filename) tuples for the given plan."""
-        url = MAVAT_API_DOCS.format(plan_number=plan_number)
+        url = f"{MAVAT_REST_BASE}/documents/{plan_number}"
         try:
             resp = self.session.get(url, timeout=REQUEST_TIMEOUT)
-            resp.raise_for_status()
+            if not resp.ok or b"<!DOCTYPE" in resp.content[:20]:
+                raise ValueError(f"API returned non-JSON (status {resp.status_code})")
             data = resp.json()
         except Exception as exc:
-            logger.warning(
-                "mavat: document list API failed for plan %s (%s); "
-                "falling back to direct plan-page scrape",
-                plan_number, exc
-            )
-            return self._scrape_plan_page(plan_number)
+            self._emit(f"  ממשק המסמכים אינו זמין ({exc}) — מנסה דרך דף התכנית")
+            return self._scrape_plan_page(pl_url, plan_number)
 
-        # The API returns a list of document objects; field names vary –
-        # try several common key names.
         docs = []
         items = data if isinstance(data, list) else data.get("documents", data.get("docs", []))
         for item in items:
@@ -132,22 +160,21 @@ class MavatDownloader(BaseDownloader):
             )
             if doc_id:
                 docs.append((str(doc_id), str(name)))
-
         return docs
 
-    def _scrape_plan_page(self, plan_number: str) -> list[tuple[str, str]]:
+    def _scrape_plan_page(self, pl_url: str, plan_number: str) -> list[tuple[str, str]]:
         """Fallback: scrape the mavat plan viewer page for PDF hrefs."""
-        url = MAVAT_DOCS_URL.format(plan_number=plan_number)
+        if not pl_url:
+            return []
+        import re
         try:
-            resp = self.session.get(url, timeout=REQUEST_TIMEOUT)
+            resp = self.session.get(pl_url, timeout=REQUEST_TIMEOUT)
             resp.raise_for_status()
         except Exception as exc:
-            logger.error("mavat: plan page scrape failed for plan %s: %s", plan_number, exc)
+            self._emit(f"  כשל בגישה לדף התכנית: {exc}")
             return []
 
-        import re
-        # Look for links that look like document IDs in the page HTML
-        doc_ids = re.findall(r'/SV4/1/' + re.escape(plan_number) + r'/(\d+)', resp.text)
+        doc_ids = re.findall(r'/SV4/\d+/\d+/(\d+)', resp.text)
         return [(did, f"plan_{plan_number}_doc_{did}.pdf") for did in set(doc_ids)]
 
     # ------------------------------------------------------------------
@@ -157,24 +184,21 @@ class MavatDownloader(BaseDownloader):
     def _download_pdf(
         self, plan_number: str, doc_id: str, filename: str, dest_dir: Path
     ) -> Path | None:
-        # Ensure the filename ends with .pdf
         safe_name = filename if filename.lower().endswith(".pdf") else filename + ".pdf"
-        # Sanitise for filesystem
         safe_name = safe_name.replace("/", "_").replace("\\", "_")
         dest = dest_dir / safe_name
 
         if dest.exists():
-            logger.info("mavat: skipping %s (already downloaded)", safe_name)
+            self._emit(f"  דילוג על {safe_name} (כבר קיים)")
             return dest
 
-        url = MAVAT_PDF_URL.format(plan_number=plan_number, doc_id=doc_id)
+        url = f"{MAVAT_REST_BASE}/Attacments/?eid={doc_id}&fn={safe_name}&edn=temp-default&pn={plan_number}"
         try:
             resp = self.session.get(url, timeout=REQUEST_TIMEOUT, stream=True)
             resp.raise_for_status()
             with open(dest, "wb") as fh:
                 for chunk in resp.iter_content(chunk_size=8192):
                     fh.write(chunk)
-            logger.info("mavat: downloaded %s -> %s", url, dest)
             return dest
         except Exception as exc:
             logger.error("mavat: failed to download %s: %s", url, exc)
