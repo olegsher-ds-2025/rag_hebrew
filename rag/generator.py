@@ -5,10 +5,11 @@ Synthesises retrieved chunks into a concise Hebrew answer.
 
 import requests
 import logging
+import os
 
 logger = logging.getLogger(__name__)
 
-OLLAMA_URL = "http://localhost:11434/api/generate"
+OLLAMA_URL = os.getenv("OLLAMA_URL", "http://localhost:11434/api/generate")
 OLLAMA_MODEL = "qwen2.5-coder:7b"
 # (connect_timeout, read_timeout) — read timeout must exceed first-token latency (~15-20s on CPU)
 OLLAMA_TIMEOUT = (10, 120)
