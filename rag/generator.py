@@ -9,7 +9,7 @@ import os
 
 logger = logging.getLogger(__name__)
 
-OLLAMA_URL = os.getenv("OLLAMA_URL", "http://localhost:11434/api/generate")
+OLLAMA_URL = os.getenv("OLLAMA_URL", "http://10.0.0.20:11434/api/generate")
 OLLAMA_MODEL = "qwen2.5-coder:7b"
 # (connect_timeout, read_timeout) — generous read timeout for remote/CPU inference
 OLLAMA_TIMEOUT = (10, 300)
@@ -63,6 +63,11 @@ def generate_answer(question: str, chunks: list[str]) -> str:
     context = "\n---\n".join(parts)
     prompt = PROMPT_TEMPLATE.format(context=context, question=question)
 
+    import json as _json
+
+    logger.info("[Ollama] Connecting to %s  model=%s", OLLAMA_URL, OLLAMA_MODEL)
+    logger.info("[Ollama] Prompt length: %d chars", len(prompt))
+
     try:
         resp = requests.post(
             OLLAMA_URL,
@@ -70,10 +75,11 @@ def generate_answer(question: str, chunks: list[str]) -> str:
             stream=True,
             timeout=OLLAMA_TIMEOUT,
         )
+        logger.info("[Ollama] HTTP status: %s", resp.status_code)
         resp.raise_for_status()
 
         answer_parts = []
-        import json as _json
+        token_count = 0
         for line in resp.iter_lines(chunk_size=None):
             if not line:
                 continue
@@ -82,11 +88,24 @@ def generate_answer(question: str, chunks: list[str]) -> str:
             except Exception:
                 continue
             answer_parts.append(token.get("response", ""))
+            token_count += 1
             if token.get("done"):
+                logger.info("[Ollama] Stream done after %d tokens", token_count)
                 break
 
-        return "".join(answer_parts).strip()
+        answer = "".join(answer_parts).strip()
+        logger.info("[Ollama] Answer length: %d chars", len(answer))
+        return answer
 
+    except requests.exceptions.ConnectionError as exc:
+        logger.error("[Ollama] Connection failed (is Ollama running at %s?): %s", OLLAMA_URL, exc)
+        return ""
+    except requests.exceptions.Timeout as exc:
+        logger.error("[Ollama] Request timed out (connect=%ss, read=%ss): %s", OLLAMA_TIMEOUT[0], OLLAMA_TIMEOUT[1], exc)
+        return ""
+    except requests.exceptions.HTTPError as exc:
+        logger.error("[Ollama] HTTP error %s: %s", resp.status_code, exc)
+        return ""
     except Exception as exc:
-        logger.warning("LLM generation failed: %s", exc)
+        logger.error("[Ollama] Unexpected error: %s", exc)
         return ""
