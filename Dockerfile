@@ -1,3 +1,6 @@
+# Multi-arch base: Docker pulls the linux/arm64 variant automatically on the
+# Jetson, so this image builds natively on the Orin Nano. The LLM runs outside
+# the container via llama-server on the host; only embeddings/OCR run in here.
 FROM python:3.10-slim
 
 ENV PYTHONUNBUFFERED=1

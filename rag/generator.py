@@ -1,18 +1,27 @@
 """
-LLM answer generator using a local Ollama model.
+LLM answer generator using a llama.cpp server (llama-server).
 Synthesises retrieved chunks into a concise Hebrew answer.
+
+The app runs in a container and talks to a `llama-server` HTTP daemon running
+on the Jetson host. Point LLAMACPP_URL at the host's /completion endpoint, e.g.
+    LLAMACPP_URL=http://host.docker.internal:8080/completion
 """
 
-import requests
+import json as _json
 import logging
 import os
 
+import requests
+
 logger = logging.getLogger(__name__)
 
-OLLAMA_URL = os.getenv("OLLAMA_URL", "http://10.0.0.20:11434/api/generate")
-OLLAMA_MODEL = "qwen2.5-coder:7b"
-# (connect_timeout, read_timeout) — generous read timeout for remote/CPU inference
-OLLAMA_TIMEOUT = (10, 300)
+# llama-server native completion endpoint (NOT the OpenAI-compatible /v1 one).
+LLAMACPP_URL = os.getenv("LLAMACPP_URL", "http://host.docker.internal:8080/completion")
+# Max tokens to generate. Answers are 1-2 sentences, so this stays small.
+LLAMACPP_N_PREDICT = int(os.getenv("LLAMACPP_N_PREDICT", "256"))
+LLAMACPP_TEMPERATURE = float(os.getenv("LLAMACPP_TEMPERATURE", "0.2"))
+# (connect_timeout, read_timeout) — generous read timeout for Jetson inference.
+LLAMACPP_TIMEOUT = (10, 300)
 MAX_CONTEXT_CHARS = 2000    # keep context short for speed
 TOP_N_CHUNKS = 5
 
@@ -41,15 +50,8 @@ def _strip_prefix(chunk: str) -> str:
     return chunk
 
 
-def generate_answer(question: str, chunks: list[str]) -> str:
-    """
-    Stream a response from Ollama to avoid read-timeout on slower models.
-    Returns the generated answer, or empty string on failure.
-    """
-    if not chunks:
-        return ""
-
-    # Build compact context from top chunks
+def _build_prompt(question: str, chunks: list[str]) -> str:
+    """Assemble a compact prompt from the top retrieved chunks."""
     parts = []
     total = 0
     for c in chunks[:TOP_N_CHUNKS]:
@@ -61,51 +63,73 @@ def generate_answer(question: str, chunks: list[str]) -> str:
         total += len(text[:remaining])
 
     context = "\n---\n".join(parts)
-    prompt = PROMPT_TEMPLATE.format(context=context, question=question)
+    return PROMPT_TEMPLATE.format(context=context, question=question)
 
-    import json as _json
 
-    logger.info("[Ollama] Connecting to %s  model=%s", OLLAMA_URL, OLLAMA_MODEL)
-    logger.info("[Ollama] Prompt length: %d chars", len(prompt))
+def generate_answer(question: str, chunks: list[str]) -> str:
+    """
+    Stream a response from llama-server to avoid read-timeout on slower models.
+    Returns the generated answer, or empty string on failure.
+    """
+    if not chunks:
+        return ""
+
+    prompt = _build_prompt(question, chunks)
+
+    logger.info("[llama.cpp] Connecting to %s", LLAMACPP_URL)
+    logger.info("[llama.cpp] Prompt length: %d chars", len(prompt))
+
+    payload = {
+        "prompt": prompt,
+        "n_predict": LLAMACPP_N_PREDICT,
+        "temperature": LLAMACPP_TEMPERATURE,
+        "stream": True,
+        # Stop once the model starts a new turn / question.
+        "stop": ["\nשאלה:", "\nמסמכים:"],
+    }
 
     try:
         resp = requests.post(
-            OLLAMA_URL,
-            json={"model": OLLAMA_MODEL, "prompt": prompt, "stream": True},
+            LLAMACPP_URL,
+            json=payload,
             stream=True,
-            timeout=OLLAMA_TIMEOUT,
+            timeout=LLAMACPP_TIMEOUT,
         )
-        logger.info("[Ollama] HTTP status: %s", resp.status_code)
+        logger.info("[llama.cpp] HTTP status: %s", resp.status_code)
         resp.raise_for_status()
 
         answer_parts = []
         token_count = 0
-        for line in resp.iter_lines(chunk_size=None):
-            if not line:
+        for raw in resp.iter_lines(chunk_size=None, decode_unicode=True):
+            if not raw:
+                continue
+            # llama-server streams Server-Sent Events: "data: {json}".
+            line = raw[len("data:"):].strip() if raw.startswith("data:") else raw.strip()
+            if not line or line == "[DONE]":
                 continue
             try:
                 token = _json.loads(line)
             except Exception:
                 continue
-            answer_parts.append(token.get("response", ""))
+            answer_parts.append(token.get("content", ""))
             token_count += 1
-            if token.get("done"):
-                logger.info("[Ollama] Stream done after %d tokens", token_count)
+            if token.get("stop"):
+                logger.info("[llama.cpp] Stream done after %d tokens", token_count)
                 break
 
         answer = "".join(answer_parts).strip()
-        logger.info("[Ollama] Answer length: %d chars", len(answer))
+        logger.info("[llama.cpp] Answer length: %d chars", len(answer))
         return answer
 
     except requests.exceptions.ConnectionError as exc:
-        logger.error("[Ollama] Connection failed (is Ollama running at %s?): %s", OLLAMA_URL, exc)
+        logger.error("[llama.cpp] Connection failed (is llama-server running at %s?): %s", LLAMACPP_URL, exc)
         return ""
     except requests.exceptions.Timeout as exc:
-        logger.error("[Ollama] Request timed out (connect=%ss, read=%ss): %s", OLLAMA_TIMEOUT[0], OLLAMA_TIMEOUT[1], exc)
+        logger.error("[llama.cpp] Request timed out (connect=%ss, read=%ss): %s", LLAMACPP_TIMEOUT[0], LLAMACPP_TIMEOUT[1], exc)
         return ""
     except requests.exceptions.HTTPError as exc:
-        logger.error("[Ollama] HTTP error %s: %s", resp.status_code, exc)
+        logger.error("[llama.cpp] HTTP error %s: %s", resp.status_code, exc)
         return ""
     except Exception as exc:
-        logger.error("[Ollama] Unexpected error: %s", exc)
+        logger.error("[llama.cpp] Unexpected error: %s", exc)
         return ""
