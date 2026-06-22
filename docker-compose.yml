@@ -1,4 +1,3 @@
-version: '3.8'
 services:
   app:
     build: .
@@ -9,7 +8,11 @@ services:
       - ./vector_store:/app/vector_store
       - ./indexdir:/app/indexdir
     restart: unless-stopped
+    # Let the container reach llama-server running on the Jetson host.
+    # "host-gateway" resolves host.docker.internal to the host's IP.
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     environment:
       - PYTHONUNBUFFERED=1
-      - OLLAMA_URL=http://10.0.0.20:11434/api/generate
-
+      # llama-server's native completion endpoint on the Jetson host (port 8080).
+      - LLAMACPP_URL=http://host.docker.internal:8080/completion
