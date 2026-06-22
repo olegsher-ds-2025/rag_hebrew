@@ -2,7 +2,7 @@ services:
   app:
     build: .
     ports:
-      - "8000:8000"
+      - "9000:9000"
     volumes:
       - ./data:/app/data
       - ./vector_store:/app/vector_store

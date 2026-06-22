@@ -11,7 +11,7 @@ it can use the GPU. The container reaches the server over HTTP.
 │        ▲                                                                     │
 │        │ HTTP (host.docker.internal:8080)                                    │
 │   ┌────┴───────────────── Docker container ──────────────────┐              │
-│   │  FastAPI app + embeddings (CPU) + FAISS/BM25   port 8000 │              │
+│   │  FastAPI app + embeddings (CPU) + FAISS/BM25   port 9000 │              │
 │   └──────────────────────────────────────────────────────────┘              │
 └──────────────────────────────────────────────────────────────────────────────┘
 ```
@@ -51,7 +51,7 @@ The first build downloads the embedding model (`intfloat/multilingual-e5-large`)
 and installs Tesseract, so it can take several minutes. Subsequent starts are
 fast.
 
-The app is served at `http://<jetson-ip>:8000`.
+The app is served at `http://<jetson-ip>:9000`.
 
 ## How the container reaches llama-server
 

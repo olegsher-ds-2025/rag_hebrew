@@ -16,8 +16,8 @@ python main.py
 # Batch-index all PDFs/images from data/raw/
 python scripts/build_index_all.py
 
-# Start the API server (serves on http://localhost:8000)
-uvicorn api.app:app --host 0.0.0.0 --port 8000
+# Start the API server (serves on http://localhost:9000)
+uvicorn api.app:app --host 0.0.0.0 --port 9000
 
 # Docker (recommended for deployment)
 docker-compose up --build -d
