@@ -20,11 +20,13 @@ WORKDIR /app
 COPY requirements.txt /app/
 RUN pip install --upgrade pip && pip install --no-cache-dir -r requirements.txt
 
+# Pre-download embedding model to image cache. This runs BEFORE copying the app
+# code so that source changes don't invalidate this layer and re-download the
+# ~2 GB model on every rebuild.
+RUN python -c "from sentence_transformers import SentenceTransformer; SentenceTransformer('intfloat/multilingual-e5-large')"
+
 # Copy project
 COPY . /app
-
-# Pre-download embedding model to image cache
-RUN python -c "from sentence_transformers import SentenceTransformer; SentenceTransformer('intfloat/multilingual-e5-large')"
 
 EXPOSE 9000
 

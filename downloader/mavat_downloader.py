@@ -30,7 +30,7 @@ PLANS_QUERY_URL = (
 # mavat REST API base (may be under maintenance)
 MAVAT_REST_BASE = "https://mavat.iplan.gov.il/rest/api"
 
-REQUEST_TIMEOUT = 30  # seconds
+REQUEST_TIMEOUT = 60  # seconds; the ArcGIS planning layer is slow (~20-35s)
 
 
 class _LegacySSLAdapter(HTTPAdapter):
@@ -53,8 +53,12 @@ class MavatDownloader(BaseDownloader):
         self.session.headers.update({
             "User-Agent": "Mozilla/5.0 (compatible; HebrewRAG/1.0)"
         })
-        adapter = _LegacySSLAdapter()
-        self.session.mount("https://", adapter)
+        # Both gov hosts (ags.iplan.gov.il ArcGIS and mavat.iplan.gov.il) use old
+        # TLS ciphers that fail the handshake under strict OpenSSL configs (e.g.
+        # inside the container: SSLV3_ALERT_HANDSHAKE_FAILURE). The legacy adapter
+        # lowers SECLEVEL so the handshake succeeds, so mount it for all https.
+        # It adds some latency to ArcGIS — REQUEST_TIMEOUT is sized to absorb it.
+        self.session.mount("https://", _LegacySSLAdapter())
         self.log: list[str] = []
 
     def _emit(self, msg: str) -> None:
@@ -102,10 +106,17 @@ class MavatDownloader(BaseDownloader):
     # ------------------------------------------------------------------
 
     def _search_plans(self, plan_name: str) -> list[dict]:
-        """Return list of dicts with pl_number, pl_name, pl_url."""
-        safe_name = plan_name.replace("'", "''")
+        """
+        Return list of dicts with pl_number, pl_name, pl_url.
+
+        The query string may be either a plan number (מספר תכנית, e.g.
+        "504-0100552") or a free-text plan name (שם תכנית). A single LIKE-on-both
+        query covers either case, so the caller does not need to know which was
+        entered.
+        """
+        safe = plan_name.replace("'", "''")
         params = {
-            "where": f"pl_name LIKE '%{safe_name}%'",
+            "where": f"pl_number LIKE '%{safe}%' OR pl_name LIKE '%{safe}%'",
             "outFields": "pl_number,pl_name,pl_url",
             "returnDistinctValues": "true",
             "returnGeometry": "false",
@@ -140,7 +151,12 @@ class MavatDownloader(BaseDownloader):
         url = f"{MAVAT_REST_BASE}/documents/{plan_number}"
         try:
             resp = self.session.get(url, timeout=REQUEST_TIMEOUT)
-            if not resp.ok or b"<!DOCTYPE" in resp.content[:20]:
+            # When the mavat REST API is down it redirects to maintenance.gov.il
+            # (HTTP 200 + HTML). Detect this explicitly so the log is unambiguous.
+            if "maintenance.gov.il" in resp.url or b"maintenance.gov.il" in resp.content[:1024]:
+                self._emit('  ⚠ ממשק המסמכים של מבא"ת בתחזוקה (maintenance.gov.il) — מנסה דרך דף התכנית')
+                return self._scrape_plan_page(pl_url, plan_number)
+            if not resp.ok or resp.content[:64].lstrip().startswith(b"<"):
                 raise ValueError(f"API returned non-JSON (status {resp.status_code})")
             data = resp.json()
         except Exception as exc:
@@ -165,6 +181,7 @@ class MavatDownloader(BaseDownloader):
     def _scrape_plan_page(self, pl_url: str, plan_number: str) -> list[tuple[str, str]]:
         """Fallback: scrape the mavat plan viewer page for PDF hrefs."""
         if not pl_url:
+            self._emit("  אין קישור לדף התכנית — לא ניתן לאחזר מסמכים")
             return []
         import re
         try:
@@ -175,6 +192,14 @@ class MavatDownloader(BaseDownloader):
             return []
 
         doc_ids = re.findall(r'/SV4/\d+/\d+/(\d+)', resp.text)
+        if not doc_ids:
+            # The plan viewer is a JavaScript SPA: the static HTML carries no
+            # document links, so there is nothing to scrape. Tell the user where
+            # to grab the files manually instead of silently returning empty.
+            self._emit(
+                "  דף התכנית נטען כיישום JavaScript (SPA) — רשימת המסמכים אינה זמינה "
+                f"בקוד הסטטי. ניתן לצפות ולהוריד ידנית ב: {pl_url}"
+            )
         return [(did, f"plan_{plan_number}_doc_{did}.pdf") for did in set(doc_ids)]
 
     # ------------------------------------------------------------------
