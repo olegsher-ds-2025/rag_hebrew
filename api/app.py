@@ -59,14 +59,26 @@ class DownloadRequest(BaseModel):
 @app.post("/download")
 def download_and_index(req: DownloadRequest):
     print(f"[server] POST /download plan_name={req.plan_name!r}")
-    downloaded, log = download_manager.download(req.plan_name)
-    if not downloaded:
-        return {"downloaded": [], "indexed_chunks": 0, "log": log}
-    indexed = rag.index_new_files(downloaded)
+    downloaded, log, metadata = download_manager.download(req.plan_name)
+
+    # Index the plan's basic info (status, area, dates) — works even when the
+    # PDFs are reCAPTCHA-gated and could not be downloaded.
+    meta_indexed = rag.index_texts(metadata)
+    if meta_indexed:
+        log.append(f"אונדקס מידע בסיסי ({meta_indexed} קטעים) מדף התכנית")
+
+    indexed = rag.index_new_files(downloaded) if downloaded else 0
     names = [p.name for p in downloaded]
-    log.append(f"אונדקסו {indexed} קטעים מ-{len(names)} קבצים")
-    print(f"[server] download: {len(names)} file(s) downloaded, {indexed} chunks indexed")
-    return {"downloaded": names, "indexed_chunks": indexed, "log": log}
+    if downloaded:
+        log.append(f"אונדקסו {indexed} קטעים מ-{len(names)} קבצים")
+
+    print(f"[server] download: {len(names)} file(s), {indexed} doc chunks, {meta_indexed} metadata chunks indexed")
+    return {
+        "downloaded": names,
+        "indexed_chunks": indexed,
+        "indexed_metadata": meta_indexed,
+        "log": log,
+    }
 
 
 @app.post("/query")

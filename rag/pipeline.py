@@ -148,20 +148,36 @@ class RAGPipeline:
             except Exception as exc:
                 logger.error("index_new_files: failed to process %s: %s", fp, exc)
 
-        if not all_chunks:
+        return self._persist_chunks(all_chunks)
+
+    def _persist_chunks(self, chunks: list[str]) -> int:
+        """Append prepared chunks to the FAISS + Whoosh stores and persist."""
+        if not chunks:
             return 0
 
         # Append to FAISS store (create new store if none exists yet)
-        embeddings = self.embedder.encode(all_chunks)
+        embeddings = self.embedder.encode(chunks)
         if self.vector_store is None:
             self.vector_store = VectorStore()
-        self.vector_store.add(embeddings, all_chunks)
+        self.vector_store.add(embeddings, chunks)
         self.vector_store.save('vector_store')
 
         # Append to Whoosh keyword index
-        self.keyword_search.add_docs(all_chunks)
+        self.keyword_search.add_docs(chunks)
 
-        return len(all_chunks)
+        return len(chunks)
+
+    def index_texts(self, chunks: list[str]) -> int:
+        """
+        Index already-prepared text chunks directly, skipping file extraction.
+
+        Used for plan metadata pulled from the ArcGIS service (status, area,
+        approval date, etc.). Chunks should already carry their [prefix].
+
+        Returns:
+            Number of chunks added.
+        """
+        return self._persist_chunks(chunks)
 
     def query(self, question: str) -> list[str]:
         # Embed with query prefix (E5 convention) for vector search

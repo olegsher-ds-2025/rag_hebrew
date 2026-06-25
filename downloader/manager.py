@@ -45,13 +45,17 @@ class DownloadManager:
                 downloaders.append((row["name"], cls()))
         return downloaders
 
-    def download(self, plan_name: str) -> tuple[list[Path], list[str]]:
+    def download(self, plan_name: str) -> tuple[list[Path], list[str], list[str]]:
         """
         Download documents for the given plan name from all enabled sites.
-        Returns (list of downloaded file paths, list of log messages).
+
+        Returns (downloaded file paths, log messages, metadata text chunks).
+        The metadata chunks are plan-info summaries (status, area, dates) that
+        can be indexed even when the PDFs themselves are not downloadable.
         """
         all_files: list[Path] = []
         all_log: list[str] = []
+        all_metadata: list[str] = []
         for site_name, downloader in self._downloaders:
             logger.info("Downloading from site=%s plan_name=%r", site_name, plan_name)
             try:
@@ -59,9 +63,11 @@ class DownloadManager:
                 all_files.extend(files)
                 if hasattr(downloader, "log"):
                     all_log.extend(downloader.log)
+                if hasattr(downloader, "metadata"):
+                    all_metadata.extend(downloader.metadata)
                 logger.info("Site %s returned %d file(s)", site_name, len(files))
             except Exception as exc:
                 msg = f"שגיאה ב-{site_name}: {exc}"
                 logger.error("Site %s download failed: %s", site_name, exc)
                 all_log.append(msg)
-        return all_files, all_log
+        return all_files, all_log, all_metadata

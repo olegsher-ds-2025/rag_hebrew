@@ -60,6 +60,9 @@ class MavatDownloader(BaseDownloader):
         # It adds some latency to ArcGIS — REQUEST_TIMEOUT is sized to absorb it.
         self.session.mount("https://", _LegacySSLAdapter())
         self.log: list[str] = []
+        # Prefixed metadata chunks (plan status/area/dates) ready for indexing;
+        # the manager collects these alongside downloaded files.
+        self.metadata: list[str] = []
 
     def _emit(self, msg: str) -> None:
         logger.info("mavat: %s", msg)
@@ -71,6 +74,7 @@ class MavatDownloader(BaseDownloader):
 
     def download(self, plan_name: str, dest_dir: Path) -> list[Path]:
         self.log = []
+        self.metadata = []
         dest_dir.mkdir(parents=True, exist_ok=True)
 
         self._emit(f"מחפש תכניות עבור: {plan_name}")
@@ -86,6 +90,12 @@ class MavatDownloader(BaseDownloader):
         downloaded: list[Path] = []
         for plan in plans:
             plan_num = plan["pl_number"]
+            # Index the plan's basic info (from ArcGIS) even if its PDFs are
+            # reCAPTCHA-gated and can't be downloaded automatically.
+            meta = self._build_metadata_chunk(plan.get("attrs", {}))
+            if meta:
+                self.metadata.append(f"[{plan_num}] " + meta)
+                self._emit("  ℹ נאסף מידע בסיסי על התכנית (סטטוס, שטח, תאריכים) לאינדוקס")
             self._emit(f"מאחזר מסמכים לתכנית {plan_num}")
             docs = self._get_document_list(plan_num, plan["pl_url"])
             if not docs:
@@ -117,7 +127,15 @@ class MavatDownloader(BaseDownloader):
         safe = plan_name.replace("'", "''")
         params = {
             "where": f"pl_number LIKE '%{safe}%' OR pl_name LIKE '%{safe}%'",
-            "outFields": "pl_number,pl_name,pl_url",
+            # Fields used both for download (number/url) and for the indexed
+            # metadata summary (status, area, dates, print counters, objectives).
+            "outFields": (
+                "pl_number,pl_name,pl_url,internet_short_status,station_desc,"
+                "pl_date_8,on_hold_date,jurstiction_area_name,district_name,"
+                "entity_subtype_desc,pl_landuse_string,pl_area_dunam,"
+                "quantity_delta_120,pl_order_print_version,pl_tasrit_prn_version,"
+                "pl_objectives"
+            ),
             "returnDistinctValues": "true",
             "returnGeometry": "false",
             "f": "json",
@@ -139,8 +157,62 @@ class MavatDownloader(BaseDownloader):
                     "pl_number": str(pl_num).strip(),
                     "pl_name": attrs.get("pl_name") or attrs.get("PL_NAME") or "",
                     "pl_url": attrs.get("pl_url") or attrs.get("PL_URL") or "",
+                    "attrs": attrs,  # full attribute set for metadata indexing
                 })
         return results
+
+    @staticmethod
+    def _fmt_date(ms) -> str | None:
+        """Convert an ArcGIS epoch-millisecond value to dd/mm/yyyy."""
+        if not ms:
+            return None
+        try:
+            from datetime import datetime, timezone
+            return datetime.fromtimestamp(int(ms) / 1000, tz=timezone.utc).strftime("%d/%m/%Y")
+        except Exception:
+            return None
+
+    def _build_metadata_chunk(self, a: dict) -> str:
+        """
+        Build a Hebrew, human-readable summary of a plan's basic info from the
+        ArcGIS attributes, for indexing alongside (or instead of) its PDFs.
+        Returns an empty string if there is nothing useful to index.
+        """
+        if not a or not a.get("pl_number"):
+            return ""
+
+        lines = [f"תוכנית {a.get('pl_number', '')}"]
+        if a.get("pl_name"):
+            lines.append(f"שם התכנית: {a['pl_name']}")
+
+        status = a.get("internet_short_status") or a.get("station_desc")
+        status_date = self._fmt_date(a.get("on_hold_date")) or self._fmt_date(a.get("pl_date_8"))
+        if status:
+            lines.append(f"סטטוס: {status}" + (f" ({status_date})" if status_date else ""))
+
+        if a.get("jurstiction_area_name"):
+            lines.append(f"מרחב תכנון: {a['jurstiction_area_name']}")
+        if a.get("district_name"):
+            lines.append(f"מחוז: {a['district_name']}")
+        if a.get("entity_subtype_desc"):
+            lines.append(f"סוג תכנית: {a['entity_subtype_desc']}")
+        if a.get("pl_landuse_string"):
+            lines.append(f"ייעוד קרקע: {a['pl_landuse_string']}")
+        if a.get("pl_area_dunam") is not None:
+            lines.append(f'סה"כ שטח בדונם: {a["pl_area_dunam"]}')
+        if a.get("quantity_delta_120"):
+            lines.append(f"תוספת יחידות דיור: {int(a['quantity_delta_120'])}")
+        if a.get("pl_order_print_version"):
+            lines.append(f"מונה תדפיס הוראות: {int(a['pl_order_print_version'])}")
+        if a.get("pl_tasrit_prn_version"):
+            lines.append(f"מונה תדפיס תשריט: {int(a['pl_tasrit_prn_version'])}")
+        if a.get("pl_objectives"):
+            objectives = " ".join(str(a["pl_objectives"]).split())
+            lines.append(f"מטרות התכנית: {objectives}")
+        if a.get("pl_url"):
+            lines.append(f"קישור: {a['pl_url']}")
+
+        return "\n".join(lines)
 
     # ------------------------------------------------------------------
     # Step 2: get document list for a plan
