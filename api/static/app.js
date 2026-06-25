@@ -80,7 +80,13 @@ document.addEventListener('DOMContentLoaded', () => {
       if (data.results && data.results.length > 0) {
         const uniqueSources = [...new Set(data.results.filter(r => r.source).map(r => r.source))];
         const html = data.results.map((r, i) => {
-          const text = (r.text || '').replace(/</g, '&lt;');
+          // Escape HTML first, then turn the chunk's line breaks into <br/>:
+          // metadata chunks have "\n" between fields, and ArcGIS objectives use
+          // "^" as a separator. Without this they collapse into one long line.
+          const text = (r.text || '')
+            .replace(/</g, '&lt;')
+            .replace(/\s*\^\s*/g, '<br/>')
+            .replace(/\n/g, '<br/>');
           const link = r.source
             ? `<a href="${r.source}" target="_blank" rel="noopener" style="font-size:0.85em;">[פתח מסמך]</a> `
             : '';

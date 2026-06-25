@@ -100,9 +100,14 @@ def generate_answer(question: str, chunks: list[str]) -> str:
 
         answer_parts = []
         token_count = 0
-        for raw in resp.iter_lines(chunk_size=None, decode_unicode=True):
+        # Decode the stream as UTF-8 ourselves. llama-server sends UTF-8, but its
+        # Content-Type is text/event-stream with no charset, and requests then
+        # defaults text/* to ISO-8859-1 — which mangles Hebrew. Iterate raw bytes
+        # (SSE lines end on \n, a safe boundary for multibyte UTF-8) and decode.
+        for raw in resp.iter_lines(chunk_size=None, decode_unicode=False):
             if not raw:
                 continue
+            raw = raw.decode("utf-8", errors="replace")
             # llama-server streams Server-Sent Events: "data: {json}".
             line = raw[len("data:"):].strip() if raw.startswith("data:") else raw.strip()
             if not line or line == "[DONE]":
