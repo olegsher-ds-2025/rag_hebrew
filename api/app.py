@@ -88,7 +88,18 @@ def query_post(req: QueryRequest):
 
 @app.get("/", response_class=HTMLResponse)
 def home():
-        return """<!doctype html>
+        # Cache-bust app.js by its mtime so browsers always pick up JS changes
+        # (e.g. the source-chunk line-break formatting) instead of a stale copy.
+        try:
+            app_js_ver = int((static_dir / "app.js").stat().st_mtime)
+        except OSError:
+            app_js_ver = 0
+        return _HOME_HTML.replace(
+            "/static/app.js", f"/static/app.js?v={app_js_ver}"
+        )
+
+
+_HOME_HTML = """<!doctype html>
 <html>
     <head>
         <meta charset="utf-8" />

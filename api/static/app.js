@@ -69,7 +69,14 @@ document.addEventListener('DOMContentLoaded', () => {
 
       // Show generated answer
       if (data.answer) {
-        answerBox.innerHTML = '<strong>תשובה:</strong>\n' + data.answer.replace(/</g, '&lt;');
+        // Escape HTML, then turn the "^" objective separators (and any \n) into
+        // line breaks so the answer reads like the source chunks instead of one
+        // long run-on line. #answer-box is white-space:pre-wrap so \n also breaks.
+        const answer = data.answer
+          .replace(/</g, '&lt;')
+          .replace(/\s*\^\s*/g, '<br/>')
+          .replace(/\n/g, '<br/>');
+        answerBox.innerHTML = '<strong>תשובה:</strong><br/>' + answer;
       } else if (!data.results || data.results.length === 0) {
         answerBox.textContent = 'לא נמצאו תוצאות';
       } else {
@@ -83,10 +90,15 @@ document.addEventListener('DOMContentLoaded', () => {
           // Escape HTML first, then turn the chunk's line breaks into <br/>:
           // metadata chunks have "\n" between fields, and ArcGIS objectives use
           // "^" as a separator. Without this they collapse into one long line.
-          const text = (r.text || '')
+          let text = (r.text || '')
             .replace(/</g, '&lt;')
             .replace(/\s*\^\s*/g, '<br/>')
             .replace(/\n/g, '<br/>');
+          // Make https:// URLs clickable and open in new tabs
+          text = text.replace(
+            /https:\/\/[^\s<]+/g,
+            match => `<a href="${match}" target="_blank" rel="noopener" style="color:#0066cc;text-decoration:underline;">${match}</a>`
+          );
           const link = r.source
             ? `<a href="${r.source}" target="_blank" rel="noopener" style="font-size:0.85em;">[פתח מסמך]</a> `
             : '';

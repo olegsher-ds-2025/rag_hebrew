@@ -29,10 +29,12 @@ PROMPT_TEMPLATE = """אתה עוזר מומחה לתכנון ובניה בישר
 בהתבסס על קטעי המסמכים הבאים בלבד, ענה על השאלה בעברית בצורה תמציתית ומדויקת.
 
 הנחיות חשובות:
+- כאשר מופיעות שדות מובנות (שם התכנית:, סטטוס:, סה״כ שטח בדונם:, וכו׳), העתק בדיוק את הערך הנתון בשדה.
 - כאשר שואלים על "שטח" של תא שטח / מגרש, הכוונה היא לגודל המגרש הפיזי (גודל מגרש במ"ר) ולא לזכויות הבנייה (שטח עיקרי/שטח מרפסות).
-- כלול את הנתון המספרי הספציפי ואת יחידת המידה.
-- אם המידע אינו במסמכים, ציין זאת במפורש.
+- כלול את הנתון המספרי הספציפי בדיוק כפי שהוא מופיע, ואת יחידת המידה.
+- אם המידע אינו במסמכים, ענה בדיוק: "אין מידע בתכניות"
 - ענה במשפט אחד עד שניים בלבד.
+- אל תנחש, אל תשנה מספרים, אל תתן תשובה ספקולטיבית.
 
 מסמכים:
 {context}
@@ -50,17 +52,80 @@ def _strip_prefix(chunk: str) -> str:
     return chunk
 
 
+def _is_no_answer_response(answer: str) -> bool:
+    """Check if the LLM explicitly said it has no relevant data."""
+    if not answer:
+        return True
+    # LLM should say one of these when docs don't contain the answer
+    no_data_phrases = [
+        "אין מידע",
+        "אינו מופיע",
+        "לא נמצא",
+        "לא קיים",
+        "לא צוין",
+        "לא מופיע",
+    ]
+    lower = answer.lower()
+    return any(phrase in lower for phrase in no_data_phrases)
+
+
+def _fix_area_number(answer: str, question: str, chunks: list[str]) -> str:
+    """
+    If the question asks about area (שטח) and the answer contains a suspicious area number,
+    try to extract the correct value from the metadata field 'סה״כ שטח בדונם:'.
+
+    This is a safety net for LLM mistakes like confusing 0.975 with 9.75.
+    """
+    import re
+
+    if "שטח" not in question:
+        return answer
+
+    # Look for "סה״כ שטח בדונם:" field in chunks
+    for chunk in chunks:
+        m = re.search(r'סה"כ שטח בדונם:\s*([\d.]+)', chunk)
+        if m:
+            correct_area = m.group(1)
+            # Replace any suspiciously large area (> 5 dunams for single plans) with the correct value
+            # This catches cases like "9.75" that should be "0.975"
+            if re.search(r'[5-9]\.\d+|[1-9]\d+', answer) and '0.' in correct_area:
+                return f"סה״כ שטח בדונם: {correct_area}"
+
+    return answer
+
+
+def _fix_plan_name(answer: str, question: str, chunks: list[str]) -> str:
+    """
+    If the question asks about plan name (שם התכנית) and the LLM returned only
+    the plan number, extract the actual name from the metadata field 'שם התכנית:'.
+    """
+    import re
+
+    if "שם" not in question or "תכנית" not in question:
+        return answer
+
+    # If answer is just a plan number, try to extract the real name
+    if re.match(r'^תוכנית\s*\d{3}-\d{7}$', answer.strip()):
+        # Look for "שם התכנית:" field in chunks
+        for chunk in chunks:
+            m = re.search(r'שם התכנית:\s*(.+?)(?:\n|$)', chunk)
+            if m:
+                plan_name = m.group(1).strip()
+                if plan_name and plan_name != answer:
+                    return plan_name
+
+    return answer
+
+
 def _build_prompt(question: str, chunks: list[str]) -> str:
-    """Assemble a compact prompt from the top retrieved chunks."""
+    """Assemble a compact prompt from the top retrieved chunks, distributing context fairly."""
+    # Allocate equal context per chunk so one chunk can't starve others
+    per_chunk = MAX_CONTEXT_CHARS // TOP_N_CHUNKS
     parts = []
-    total = 0
     for c in chunks[:TOP_N_CHUNKS]:
         text = _strip_prefix(c)
-        remaining = MAX_CONTEXT_CHARS - total
-        if remaining <= 0:
-            break
-        parts.append(text[:remaining])
-        total += len(text[:remaining])
+        if text:
+            parts.append(text[:per_chunk])
 
     context = "\n---\n".join(parts)
     return PROMPT_TEMPLATE.format(context=context, question=question)

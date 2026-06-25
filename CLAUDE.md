@@ -29,6 +29,7 @@ deployment is an **NVIDIA Jetson Orin Nano**: the app runs in Docker while the L
 ```bash
 # Install (also needs system packages: tesseract-ocr, tesseract-ocr-heb)
 pip install -r requirements.txt
+playwright install chromium              # install Chromium for mavat document scraping (optional)
 
 python main.py                          # index one file (data/raw/45.pdf) + test query
 python scripts/build_index_all.py       # full rebuild from everything in data/raw/

@@ -70,7 +70,15 @@ def _rerank(question: str, chunks: list[str]) -> list[str]:
     words    = {t for t in tokens if not t.isdigit()}
 
     def score(chunk: str) -> int:
-        s = sum(5 for n in numbers if n in chunk)
+        s = 0
+
+        # +50 boost for metadata chunks (סטטוס וזכויות בנייה) that contain a query number.
+        # Metadata is a direct answer for plan-number lookups.
+        is_metadata = "סטטוס:" in chunk or "שם התכנית:" in chunk
+        if is_metadata and any(n in chunk for n in numbers):
+            s += 50
+
+        s += sum(5 for n in numbers if n in chunk)
         s += sum(1 for w in words if w in chunk)
 
         # +8 for plot-adjacent number match (capped per number)
@@ -199,14 +207,35 @@ class RAGPipeline:
 
         Returns:
             {
-                "answer": str,          # LLM-generated Hebrew answer (may be "" on failure)
+                "answer": str,          # LLM-generated Hebrew answer, or "אין תשובה" if no relevant data
                 "chunks": list[str],    # raw retrieved chunks with [filename] prefixes
             }
         """
+        from rag.generator import _is_no_answer_response
+
         chunks = self.query(question)
         # Rerank using synonym-expanded question so "שטח" also matches "גודל"
         # and "פלות 22" also matches chunks with "תא שטח 22" / "מגרש 22"
         expanded = _expand_question(question)
         reranked = _rerank(expanded, chunks)
+
+        # If question asks about a specific plan number, filter to only that plan.
+        # This avoids showing unrelated plans in the sources.
+        plan_nums = re.findall(r'\b(\d{3}-\d{7})\b', question)
+        if plan_nums:
+            plan_num = plan_nums[0]  # use the first mentioned plan
+            reranked = [c for c in reranked if plan_num in c]
+
         answer = generate_answer(question, reranked)
+
+        # If the LLM explicitly said it has no relevant data, suppress the answer
+        # and return "אין תשובה" so the UI does not show speculative content.
+        if _is_no_answer_response(answer):
+            answer = "אין תשובה"
+        else:
+            # Safety nets: fix obvious extraction mistakes
+            from rag.generator import _fix_area_number, _fix_plan_name
+            answer = _fix_area_number(answer, question, reranked)
+            answer = _fix_plan_name(answer, question, reranked)
+
         return {"answer": answer, "chunks": reranked}

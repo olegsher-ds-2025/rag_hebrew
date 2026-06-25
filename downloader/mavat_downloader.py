@@ -251,11 +251,16 @@ class MavatDownloader(BaseDownloader):
         return docs
 
     def _scrape_plan_page(self, pl_url: str, plan_number: str) -> list[tuple[str, str]]:
-        """Fallback: scrape the mavat plan viewer page for PDF hrefs."""
+        """
+        Fallback: scrape the mavat plan viewer page for PDF hrefs.
+        Tries static HTML first, then falls back to browser automation (Playwright).
+        """
         if not pl_url:
             self._emit("  אין קישור לדף התכנית — לא ניתן לאחזר מסמכים")
             return []
         import re
+
+        # Try static HTML first (fast)
         try:
             resp = self.session.get(pl_url, timeout=REQUEST_TIMEOUT)
             resp.raise_for_status()
@@ -264,15 +269,126 @@ class MavatDownloader(BaseDownloader):
             return []
 
         doc_ids = re.findall(r'/SV4/\d+/\d+/(\d+)', resp.text)
-        if not doc_ids:
-            # The plan viewer is a JavaScript SPA: the static HTML carries no
-            # document links, so there is nothing to scrape. Tell the user where
-            # to grab the files manually instead of silently returning empty.
-            self._emit(
-                "  דף התכנית נטען כיישום JavaScript (SPA) — רשימת המסמכים אינה זמינה "
-                f"בקוד הסטטי. ניתן לצפות ולהוריד ידנית ב: {pl_url}"
-            )
-        return [(did, f"plan_{plan_number}_doc_{did}.pdf") for did in set(doc_ids)]
+        if doc_ids:
+            return [(did, f"plan_{plan_number}_doc_{did}.pdf") for did in set(doc_ids)]
+
+        # Static HTML has no links. Try browser automation.
+        self._emit("  דף התכנית הוא JavaScript SPA — מנסה עם דפדפן...")
+        docs = self._scrape_plan_page_with_browser(pl_url, plan_number)
+        if docs:
+            return docs
+
+        # Browser automation didn't work either. Tell user to download manually.
+        self._emit(
+            "  לא ניתן לאחזר רשימת המסמכים בצורה אוטומטית. "
+            f"ניתן לצפות ולהוריד ידנית ב: {pl_url}"
+        )
+        return []
+
+    def _scrape_plan_page_with_browser(self, pl_url: str, plan_number: str) -> list[tuple[str, str]]:
+        """
+        Use Playwright to load the plan page, let JS render, and extract document links.
+        Optimized for Jetson Orin Nano: minimal memory footprint, fast timeouts.
+
+        Strategy: Don't wait for full networkidle (which may never happen on SPA).
+        Instead, wait for the document buttons to appear, then extract them.
+        """
+        try:
+            from playwright.sync_api import sync_playwright
+        except ImportError:
+            self._emit("  playwright אינו מותקן (pip install playwright)")
+            return []
+
+        docs = []
+        try:
+            with sync_playwright() as p:
+                # Launch Chromium with memory-conscious flags for Jetson Nano
+                browser = p.chromium.launch(
+                    headless=True,
+                    args=[
+                        "--disable-gpu",           # no GPU rendering (Jetson GPU reserved for LLM)
+                        "--disable-dev-shm-usage", # avoid /dev/shm issues on embedded systems
+                        "--single-process",        # reduce memory overhead
+                        "--disable-extensions",
+                        "--disable-plugins",
+                        "--no-first-run",
+                    ],
+                    timeout=30000,  # 30s launch timeout
+                )
+                page = browser.new_page()
+                page.set_default_timeout(60000)  # 60s page operation timeout
+
+                # Load page with fast strategy: don't wait for networkidle (SPA may never fully settle).
+                try:
+                    page.goto(pl_url, wait_until="domcontentloaded", timeout=12000)
+                except Exception as e:
+                    logger.debug(f"Page load timeout for {pl_url}: {e}, continuing anyway...")
+
+                # Mavat SPA loads buttons asynchronously. Wait a bit for JS to render.
+                import time
+                import re
+
+                # Try increasingly patient waits for the page to settle
+                # Mavat SPA is slow, try waiting up to 10 seconds total
+                for wait_seconds in [3, 5, 8]:
+                    time.sleep(wait_seconds)
+                    page_html = page.content()
+
+                    # Look for actual document links in page HTML
+                    # Try multiple patterns to find real document IDs (not just page params)
+
+                    # Pattern 1: look for attachment/document API URLs
+                    doc_urls = re.findall(r'Attacments[/?][^"\'<>\s]*eid=(\d+)[&\']', page_html)
+
+                    # Pattern 2: look for /SV4/ paths BUT filter out the plan URL itself
+                    sv4_matches = re.findall(r'/SV4/\d+/(\d+)/\d+', page_html)
+                    sv4_matches = [m for m in sv4_matches if m != pl_url.split('/')[-2]]  # exclude plan ID
+
+                    # Pattern 3: look for document in data attributes
+                    data_docs = re.findall(r'data-doc[id]*=[\'"](\d+)[\'"]', page_html, re.IGNORECASE)
+
+                    all_doc_ids = set(doc_urls + sv4_matches + data_docs)
+
+                    if all_doc_ids:
+                        logger.info(f"Found {len(all_doc_ids)} doc IDs after {wait_seconds}s wait: {all_doc_ids}")
+                        for doc_id in all_doc_ids:
+                            docs.append((doc_id, f"plan_{plan_number}_doc_{doc_id}.pdf"))
+                        break
+                    else:
+                        logger.debug(f"No docs found after {wait_seconds}s wait, retrying...")
+
+                # Also try extracting from specific button elements if not found via HTML search
+                if not docs:
+                    logger.debug("Trying to extract from button elements...")
+                    for class_name in ["sv4-docs", "sv4-circul", "sv4-xplan"]:
+                        try:
+                            elem = page.query_selector(f"a.{class_name}")
+                            if elem:
+                                href = page.eval_on_selector(
+                                    f"a.{class_name}",
+                                    "el => el.href || el.getAttribute('data-url') || el.getAttribute('onclick') || ''"
+                                )
+                                if href:
+                                    match = re.search(r'/SV4/\d+/\d+/(\d+)', str(href))
+                                    if match:
+                                        doc_id = match.group(1)
+                                        doc_label = {"sv4-docs": "הוראות", "sv4-circul": "תשריט", "sv4-xplan": "xplan"}.get(class_name)
+                                        docs.append((doc_id, f"plan_{plan_number}_{doc_label}_{doc_id}.pdf"))
+                        except Exception as e:
+                            logger.debug(f"Failed to extract {class_name}: {e}")
+
+                browser.close()
+
+                if docs:
+                    self._emit(f"  נמצאו {len(docs)} מסמכים דרך דפדפן")
+                else:
+                    logger.debug(f"No document buttons found on {pl_url}")
+
+        except Exception as exc:
+            logger.error(f"Browser automation failed: {exc}")
+            self._emit(f"  כשל בטעינת דף התכנית דרך דפדפן: {exc}")
+
+        return docs
 
     # ------------------------------------------------------------------
     # Step 3: download a single PDF
