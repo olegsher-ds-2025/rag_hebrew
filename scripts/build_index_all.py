@@ -1,16 +1,16 @@
 #!/usr/bin/env python3
-from pathlib import Path
 import sys
+from pathlib import Path
 
 # make project importable
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from ingestion.pdf_loader import extract_text_from_pdf
+from config import CHUNK_OVERLAP, CHUNK_SIZE, RAW_DIR
 from ingestion.ocr_pipeline import ocr_image
-from processing.cleaner import clean_text
+from ingestion.pdf_loader import extract_text_from_pdf
 from processing.chunker import chunk_text
+from processing.cleaner import clean_text
 from rag.pipeline import RAGPipeline
-from config import RAW_DIR, CHUNK_SIZE, CHUNK_OVERLAP
 
 
 def build_index_all():

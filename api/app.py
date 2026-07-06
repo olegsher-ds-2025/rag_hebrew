@@ -1,18 +1,18 @@
-from pathlib import Path
-import sys
 import logging
 import os
+import sys
 import threading
 from contextlib import asynccontextmanager
+from pathlib import Path
 
 from fastapi import Depends, FastAPI, Header, HTTPException
-from pydantic import BaseModel, Field
 from fastapi.responses import HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
+from pydantic import BaseModel, Field
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from rag.pipeline import RAGPipeline
 from downloader.manager import DownloadManager
+from rag.pipeline import RAGPipeline
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)

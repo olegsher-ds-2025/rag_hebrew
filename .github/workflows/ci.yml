@@ -1,0 +1,30 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.10"
+          cache: pip
+
+      # Tests use a fake embedder and mock all network/OCR, so the heavy
+      # runtime deps (torch/sentence-transformers, opencv, playwright,
+      # tesseract) are deliberately NOT installed here.
+      - name: Install test dependencies
+        run: |
+          pip install numpy "faiss-cpu>=1.8,<2" whoosh fastapi uvicorn httpx \
+                      requests pymupdf pydantic pytest pytest-cov ruff
+
+      - name: Lint (ruff)
+        run: ruff check .
+
+      - name: Run tests
+        run: pytest --cov=processing --cov=storage --cov=retrieval --cov=rag --cov=api --cov=downloader --cov-report=term-missing

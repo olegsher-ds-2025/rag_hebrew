@@ -350,8 +350,8 @@ class MavatDownloader(BaseDownloader):
                     logger.debug(f"Page load timeout for {pl_url}: {e}, continuing anyway...")
 
                 # Mavat SPA loads buttons asynchronously. Wait a bit for JS to render.
-                import time
                 import re
+                import time
 
                 # Try increasingly patient waits for the page to settle
                 # Mavat SPA is slow, try waiting up to 10 seconds total

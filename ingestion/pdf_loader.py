@@ -1,9 +1,10 @@
-import fitz  # PyMuPDF
 from io import BytesIO
-from PIL import Image
-import pytesseract
+
 import cv2
+import fitz  # PyMuPDF
 import numpy as np
+import pytesseract
+from PIL import Image
 
 
 def extract_text_from_pdf(file_path, ocr_lang='heb'):

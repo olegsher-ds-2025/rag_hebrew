@@ -42,9 +42,9 @@ class VectorStore:
         q = np.array(query_embedding).astype('float32')
         if q.ndim == 1:
             q = q.reshape(1, -1)
-        D, I = self.index.search(q, k)
+        _dists, ids = self.index.search(q, k)
         # Guard i < len(texts): a desynced store must not crash queries.
-        return [self.texts[i] for i in I[0] if 0 <= i < len(self.texts)]
+        return [self.texts[i] for i in ids[0] if 0 <= i < len(self.texts)]
 
     def save(self, dir_path):
         p = Path(dir_path)
