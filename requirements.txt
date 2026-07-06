@@ -1,18 +1,26 @@
-pymupdf
-pytesseract
-pillow
-opencv-python
-numpy
-pandas
+# Bounded ranges: floors are known-good versions, caps prevent surprise
+# major-version breakage on the arm64/Jetson (python:3.10) image build.
 
-sentence-transformers
-faiss-cpu
+# PDF / image / OCR
+pymupdf>=1.24,<2
+pytesseract>=0.3.10,<0.4
+pillow>=10,<12
+opencv-python>=4.8,<5
+numpy>=1.26,<2.3        # numpy 2.3+ drops Python 3.10 (Docker base image)
+pandas>=2.0,<3
 
-whoosh
+# Embeddings + vector search
+sentence-transformers>=3.0,<6
+faiss-cpu>=1.8,<2
 
-fastapi
-uvicorn
+# Keyword search (project is unmaintained — pin exact)
+whoosh==2.7.4
 
-python-dotenv
-requests
-playwright
+# Web API
+fastapi>=0.110,<1
+uvicorn>=0.29,<1
+
+# Utilities
+python-dotenv>=1,<2
+requests>=2.31,<3
+playwright>=1.40,<2

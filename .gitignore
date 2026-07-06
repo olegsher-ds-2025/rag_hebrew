@@ -209,3 +209,7 @@ __marimo__/
 # Persisted indices and embeddings (volume-mounted, not committed)
 vector_store/
 indexdir/
+
+# Downloaded/source documents (volume-mounted, not committed).
+# Small test fixtures live in tests/fixtures/ instead.
+data/

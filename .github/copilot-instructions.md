@@ -56,7 +56,9 @@ api/app.py         ← FastAPI: GET+POST /query, POST /download, static file ser
 
 - **Hybrid deduplication**: `RAGPipeline.query()` merges vector and keyword results with `dict.fromkeys(...)` — order matters (vector results first). The combined list is returned directly as chunk strings to the API.
 
-- **Embedding model**: `sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2` (multilingual, 384-dim). The Dockerfile pre-bakes the model into the image layer.
+- **Embedding model**: `intfloat/multilingual-e5-large` (multilingual, 1024-dim), set in `config.py`. The embedder auto-prepends E5 task prefixes (`query: ` / `passage: `). The Dockerfile pre-bakes the model into the image layer.
+
+- **Answer generation**: `rag/generator.py` calls a llama.cpp `llama-server` (`LLAMACPP_URL`, native `/completion` streaming endpoint). `RAGPipeline.query_with_answer()` reranks retrieved chunks (plot-number/size heuristics) before synthesis. See CLAUDE.md for the authoritative architecture description.
 
 - **Persisted stores**: `vector_store/` holds `index.faiss` + `texts.json`; `indexdir/` holds the Whoosh BM25 index. Both are volume-mounted in Docker. Do not check these into git.
 

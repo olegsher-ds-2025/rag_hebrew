@@ -14,3 +14,13 @@ dist/
 .vscode/
 .idea/
 .DS_Store
+
+# Heavy runtime artifacts — volume-mounted at runtime, never baked into the image
+data/
+vector_store/
+indexdir/
+
+# Not needed inside the image
+tests/
+.github/
+*.md
