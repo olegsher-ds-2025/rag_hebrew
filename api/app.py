@@ -1,8 +1,10 @@
 from pathlib import Path
 import sys
 import logging
-from fastapi import FastAPI
-from pydantic import BaseModel
+import os
+
+from fastapi import Depends, FastAPI, Header, HTTPException
+from pydantic import BaseModel, Field
 from fastapi.responses import HTMLResponse
 from fastapi.staticfiles import StaticFiles
 
@@ -11,6 +13,7 @@ from rag.pipeline import RAGPipeline
 from downloader.manager import DownloadManager
 
 logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
 
 app = FastAPI()
 rag = RAGPipeline()
@@ -24,8 +27,21 @@ raw_dir = Path(__file__).resolve().parents[1] / 'data' / 'raw'
 app.mount("/files", StaticFiles(directory=raw_dir), name="files")
 
 
+def _safe_source(fname: str) -> str | None:
+    """
+    Map a [filename] chunk prefix to a /files/ URL, but only for names that are
+    plain basenames of files actually present in data/raw. The prefix
+    originates from remote-supplied document names — never trust it as a path.
+    """
+    if not fname or Path(fname).name != fname or fname in ('.', '..'):
+        return None
+    if not (raw_dir / fname).is_file():
+        return None
+    return f"/files/{fname}"
+
+
 def _format_query_response(q: str) -> dict:
-    print(f"[server] query q={q!r}")
+    logger.info("[server] query q=%r", q)
     result = rag.query_with_answer(q)
     formatted = []
     for r in result["chunks"]:
@@ -37,28 +53,32 @@ def _format_query_response(q: str) -> dict:
                 fname = r[1:end]
                 rest = r[end + 1:].lstrip()
                 text = rest or r
-                if (Path('data') / 'raw' / fname).exists():
-                    source = f"/files/{fname}"
+                source = _safe_source(fname)
         formatted.append({"text": text, "source": source})
     return {"answer": result["answer"], "results": formatted}
 
 
-@app.get("/query")
-def query(q: str):
-    return _format_query_response(q)
-
-
 class QueryRequest(BaseModel):
-    q: str
+    q: str = Field(min_length=1, max_length=2000)
 
 
 class DownloadRequest(BaseModel):
-    plan_name: str
+    plan_name: str = Field(min_length=1, max_length=200)
 
 
-@app.post("/download")
+# Optional shared-secret protection for the write/network-triggering endpoint.
+# Set API_TOKEN in the environment to require an X-API-Token header on /download.
+API_TOKEN = os.getenv("API_TOKEN", "")
+
+
+def require_api_token(x_api_token: str = Header(default="")):
+    if API_TOKEN and x_api_token != API_TOKEN:
+        raise HTTPException(status_code=401, detail="invalid or missing X-API-Token")
+
+
+@app.post("/download", dependencies=[Depends(require_api_token)])
 def download_and_index(req: DownloadRequest):
-    print(f"[server] POST /download plan_name={req.plan_name!r}")
+    logger.info("[server] POST /download plan_name=%r", req.plan_name)
     downloaded, log, metadata = download_manager.download(req.plan_name)
 
     # Index the plan's basic info (status, area, dates) — works even when the
@@ -72,7 +92,8 @@ def download_and_index(req: DownloadRequest):
     if downloaded:
         log.append(f"אונדקסו {indexed} קטעים מ-{len(names)} קבצים")
 
-    print(f"[server] download: {len(names)} file(s), {indexed} doc chunks, {meta_indexed} metadata chunks indexed")
+    logger.info("[server] download: %d file(s), %d doc chunks, %d metadata chunks indexed",
+                len(names), indexed, meta_indexed)
     return {
         "downloaded": names,
         "indexed_chunks": indexed,

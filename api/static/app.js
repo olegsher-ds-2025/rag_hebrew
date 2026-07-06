@@ -1,3 +1,35 @@
+// Escape ALL HTML metacharacters. Every server/LLM/document-derived string
+// must pass through here before being placed in innerHTML — chunk text and
+// filenames ultimately come from remote documents (OCR, mavat DOC_NAME) and
+// could carry markup.
+function escapeHtml(s) {
+  return String(s)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+}
+
+// Escaped text → display HTML: "^" objective separators and newlines become
+// <br/>, and https:// URLs become clickable links. Runs on ESCAPED text only,
+// so the URL match cannot contain quotes/angle brackets and is attribute-safe.
+function formatEscapedText(escaped) {
+  let html = escaped
+    .replace(/\s*\^\s*/g, '<br/>')
+    .replace(/\n/g, '<br/>');
+  html = html.replace(
+    /https:\/\/[^\s<]+/g,
+    match => `<a href="${match}" target="_blank" rel="noopener" style="color:#0066cc;text-decoration:underline;">${match}</a>`
+  );
+  return html;
+}
+
+// Only trust server-provided source paths of the exact shape /files/<name>.
+function safeSourcePath(source) {
+  return typeof source === 'string' && /^\/files\/[^/\\]+$/.test(source) ? source : null;
+}
+
 document.addEventListener('DOMContentLoaded', () => {
   // ── Download handler ──────────────────────────────────────────────────────
   const downloadBtn = document.getElementById('download-btn');
@@ -69,38 +101,22 @@ document.addEventListener('DOMContentLoaded', () => {
 
       // Show generated answer
       if (data.answer) {
-        // Escape HTML, then turn the "^" objective separators (and any \n) into
-        // line breaks so the answer reads like the source chunks instead of one
-        // long run-on line. #answer-box is white-space:pre-wrap so \n also breaks.
-        const answer = data.answer
-          .replace(/</g, '&lt;')
-          .replace(/\s*\^\s*/g, '<br/>')
-          .replace(/\n/g, '<br/>');
-        answerBox.innerHTML = '<strong>תשובה:</strong><br/>' + answer;
+        answerBox.innerHTML = '<strong>תשובה:</strong><br/>' + formatEscapedText(escapeHtml(data.answer));
       } else if (!data.results || data.results.length === 0) {
         answerBox.textContent = 'לא נמצאו תוצאות';
       } else {
-        answerBox.style.display = 'none';
+        // Chunks found but the LLM produced no answer (e.g. model unreachable) —
+        // say so instead of silently hiding the box.
+        answerBox.textContent = 'לא התקבלה תשובה מהמודל — ניתן לעיין במקורות למטה';
       }
 
       // Show source chunks in collapsible section
       if (data.results && data.results.length > 0) {
-        const uniqueSources = [...new Set(data.results.filter(r => r.source).map(r => r.source))];
-        const html = data.results.map((r, i) => {
-          // Escape HTML first, then turn the chunk's line breaks into <br/>:
-          // metadata chunks have "\n" between fields, and ArcGIS objectives use
-          // "^" as a separator. Without this they collapse into one long line.
-          let text = (r.text || '')
-            .replace(/</g, '&lt;')
-            .replace(/\s*\^\s*/g, '<br/>')
-            .replace(/\n/g, '<br/>');
-          // Make https:// URLs clickable and open in new tabs
-          text = text.replace(
-            /https:\/\/[^\s<]+/g,
-            match => `<a href="${match}" target="_blank" rel="noopener" style="color:#0066cc;text-decoration:underline;">${match}</a>`
-          );
-          const link = r.source
-            ? `<a href="${r.source}" target="_blank" rel="noopener" style="font-size:0.85em;">[פתח מסמך]</a> `
+        const html = data.results.map((r) => {
+          const text = formatEscapedText(escapeHtml(r.text || ''));
+          const source = safeSourcePath(r.source);
+          const link = source
+            ? `<a href="${escapeHtml(source)}" target="_blank" rel="noopener" style="font-size:0.85em;">[פתח מסמך]</a> `
             : '';
           return `<div style="margin-bottom:10px;padding:8px;background:#fafafa;border-radius:4px;direction:rtl;text-align:right;font-size:0.9em;">${link}${text}</div>`;
         }).join('');

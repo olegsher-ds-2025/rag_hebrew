@@ -10,10 +10,14 @@ Flow:
 Progress messages are accumulated in self.log (list[str]) during each download() call.
 """
 
-import ssl
-import requests
 import logging
+import os
+import re
+import ssl
 from pathlib import Path
+from urllib.parse import quote
+
+import requests
 from requests.adapters import HTTPAdapter
 from urllib3.util.ssl_ import create_urllib3_context
 
@@ -34,13 +38,20 @@ REQUEST_TIMEOUT = 60  # seconds; the ArcGIS planning layer is slow (~20-35s)
 
 
 class _LegacySSLAdapter(HTTPAdapter):
-    """HTTPAdapter that lowers TLS cipher security level to connect to older government servers."""
+    """
+    HTTPAdapter that lowers the TLS cipher security level (SECLEVEL=1) so the
+    handshake succeeds with older government servers. Certificate verification
+    stays ON — set MAVAT_INSECURE_SSL=1 only as a last-resort escape hatch if
+    a gov endpoint serves a broken certificate chain.
+    """
 
     def init_poolmanager(self, *args, **kwargs):
         ctx = create_urllib3_context()
         ctx.set_ciphers("DEFAULT:@SECLEVEL=1")
-        ctx.check_hostname = False
-        ctx.verify_mode = ssl.CERT_NONE
+        if os.getenv("MAVAT_INSECURE_SSL") == "1":
+            logger.warning("MAVAT_INSECURE_SSL=1: TLS certificate verification is DISABLED")
+            ctx.check_hostname = False
+            ctx.verify_mode = ssl.CERT_NONE
         kwargs["ssl_context"] = ctx
         super().init_poolmanager(*args, **kwargs)
 
@@ -56,9 +67,11 @@ class MavatDownloader(BaseDownloader):
         # Both gov hosts (ags.iplan.gov.il ArcGIS and mavat.iplan.gov.il) use old
         # TLS ciphers that fail the handshake under strict OpenSSL configs (e.g.
         # inside the container: SSLV3_ALERT_HANDSHAKE_FAILURE). The legacy adapter
-        # lowers SECLEVEL so the handshake succeeds, so mount it for all https.
-        # It adds some latency to ArcGIS — REQUEST_TIMEOUT is sized to absorb it.
-        self.session.mount("https://", _LegacySSLAdapter())
+        # lowers SECLEVEL so the handshake succeeds. Mount it ONLY for those hosts
+        # so every other https request keeps default TLS policy.
+        adapter = _LegacySSLAdapter()
+        self.session.mount("https://ags.iplan.gov.il", adapter)
+        self.session.mount("https://mavat.iplan.gov.il", adapter)
         self.log: list[str] = []
         # Prefixed metadata chunks (plan status/area/dates) ready for indexing;
         # the manager collects these alongside downloaded files.
@@ -124,7 +137,10 @@ class MavatDownloader(BaseDownloader):
         query covers either case, so the caller does not need to know which was
         entered.
         """
-        safe = plan_name.replace("'", "''")
+        # Allowlist the user-supplied search string before interpolating it into
+        # the ArcGIS where clause: keep Hebrew/word chars and common plan-name
+        # punctuation, drop SQL/LIKE metacharacters (quotes, %, parentheses).
+        safe = re.sub(r"[^\w֐-׿ .\-/]", "", plan_name).replace("'", "''")
         params = {
             "where": f"pl_number LIKE '%{safe}%' OR pl_name LIKE '%{safe}%'",
             # Fields used both for download (number/url) and for the indexed
@@ -394,18 +410,37 @@ class MavatDownloader(BaseDownloader):
     # Step 3: download a single PDF
     # ------------------------------------------------------------------
 
+    @staticmethod
+    def _sanitize_filename(filename: str) -> str:
+        """
+        Remote-supplied document names (mavat DOC_NAME) end up as filesystem
+        names, /files/ URLs and HTML — allowlist hard. Keeps word chars,
+        Hebrew, space, dot, dash, parentheses; everything else becomes '_'.
+        """
+        name = Path(filename.replace("\\", "/")).name  # strip any path part
+        name = re.sub(r"[^\w֐-׿ .\-()]", "_", name)
+        name = name.strip(" .") or "doc"
+        if len(name) > 150:
+            stem, dot, ext = name.rpartition(".")
+            name = (stem[:140] + dot + ext) if dot else name[:150]
+        return name
+
     def _download_pdf(
         self, plan_number: str, doc_id: str, filename: str, dest_dir: Path
     ) -> Path | None:
-        safe_name = filename if filename.lower().endswith(".pdf") else filename + ".pdf"
-        safe_name = safe_name.replace("/", "_").replace("\\", "_")
+        safe_name = self._sanitize_filename(filename)
+        if not safe_name.lower().endswith(".pdf"):
+            safe_name += ".pdf"
         dest = dest_dir / safe_name
 
         if dest.exists():
             self._emit(f"  דילוג על {safe_name} (כבר קיים)")
             return dest
 
-        url = f"{MAVAT_REST_BASE}/Attacments/?eid={doc_id}&fn={safe_name}&edn=temp-default&pn={plan_number}"
+        url = (
+            f"{MAVAT_REST_BASE}/Attacments/?eid={quote(str(doc_id))}"
+            f"&fn={quote(safe_name)}&edn=temp-default&pn={quote(str(plan_number))}"
+        )
         try:
             resp = self.session.get(url, timeout=REQUEST_TIMEOUT, stream=True)
             resp.raise_for_status()
