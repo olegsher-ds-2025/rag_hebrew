@@ -9,21 +9,22 @@ on the Jetson host. Point LLAMACPP_URL at the host's /completion endpoint, e.g.
 
 import json as _json
 import logging
-import os
 
 import requests
 
+from config import settings
+
 logger = logging.getLogger(__name__)
 
+# Sourced from the unified Settings (env-overridable). Read once at import.
 # llama-server native completion endpoint (NOT the OpenAI-compatible /v1 one).
-LLAMACPP_URL = os.getenv("LLAMACPP_URL", "http://host.docker.internal:8080/completion")
-# Max tokens to generate. Answers are 1-2 sentences, so this stays small.
-LLAMACPP_N_PREDICT = int(os.getenv("LLAMACPP_N_PREDICT", "256"))
-LLAMACPP_TEMPERATURE = float(os.getenv("LLAMACPP_TEMPERATURE", "0.2"))
+LLAMACPP_URL = settings.llamacpp_url
+LLAMACPP_N_PREDICT = settings.llamacpp_n_predict
+LLAMACPP_TEMPERATURE = settings.llamacpp_temperature
 # (connect_timeout, read_timeout) — generous read timeout for Jetson inference.
-LLAMACPP_TIMEOUT = (10, 300)
-MAX_CONTEXT_CHARS = 2000    # keep context short for speed
-TOP_N_CHUNKS = 5
+LLAMACPP_TIMEOUT = (settings.llamacpp_connect_timeout, settings.llamacpp_read_timeout)
+MAX_CONTEXT_CHARS = settings.llamacpp_max_context_chars
+TOP_N_CHUNKS = settings.llamacpp_top_n_chunks
 
 PROMPT_TEMPLATE = """אתה עוזר מומחה לתכנון ובניה בישראל.
 בהתבסס על קטעי המסמכים הבאים בלבד, ענה על השאלה בעברית בצורה תמציתית ומדויקת.

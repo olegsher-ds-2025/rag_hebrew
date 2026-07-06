@@ -11,7 +11,6 @@ Progress messages are accumulated in self.log (list[str]) during each download()
 """
 
 import logging
-import os
 import re
 import ssl
 from pathlib import Path
@@ -22,6 +21,7 @@ from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
 from urllib3.util.ssl_ import create_urllib3_context
 
+from config import settings
 from downloader.base_downloader import BaseDownloader
 
 logger = logging.getLogger(__name__)
@@ -35,7 +35,7 @@ PLANS_QUERY_URL = (
 # mavat REST API base (may be under maintenance)
 MAVAT_REST_BASE = "https://mavat.iplan.gov.il/rest/api"
 
-REQUEST_TIMEOUT = 60  # seconds; the ArcGIS planning layer is slow (~20-35s)
+REQUEST_TIMEOUT = settings.mavat_request_timeout  # ArcGIS layer is slow (~20-35s)
 
 
 class _LegacySSLAdapter(HTTPAdapter):
@@ -49,8 +49,8 @@ class _LegacySSLAdapter(HTTPAdapter):
     def init_poolmanager(self, *args, **kwargs):
         ctx = create_urllib3_context()
         ctx.set_ciphers("DEFAULT:@SECLEVEL=1")
-        if os.getenv("MAVAT_INSECURE_SSL") == "1":
-            logger.warning("MAVAT_INSECURE_SSL=1: TLS certificate verification is DISABLED")
+        if settings.mavat_insecure_ssl:
+            logger.warning("MAVAT_INSECURE_SSL is set: TLS certificate verification is DISABLED")
             ctx.check_hostname = False
             ctx.verify_mode = ssl.CERT_NONE
         kwargs["ssl_context"] = ctx

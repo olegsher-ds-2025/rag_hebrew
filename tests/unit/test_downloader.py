@@ -2,6 +2,7 @@ import ssl
 
 import pytest
 
+import config
 import downloader.manager as manager_mod
 from downloader.mavat_downloader import MavatDownloader, _LegacySSLAdapter
 
@@ -38,14 +39,14 @@ def test_sanitize_filename_length_cap_and_empty():
 # ---------------------------------------------------------------- TLS policy
 
 def test_tls_verification_on_by_default(monkeypatch):
-    monkeypatch.delenv('MAVAT_INSECURE_SSL', raising=False)
+    monkeypatch.setattr(config.settings, 'mavat_insecure_ssl', False)
     ctx = _LegacySSLAdapter().poolmanager.connection_pool_kw['ssl_context']
     assert ctx.verify_mode != ssl.CERT_NONE
     assert ctx.check_hostname
 
 
-def test_tls_escape_hatch_requires_env(monkeypatch):
-    monkeypatch.setenv('MAVAT_INSECURE_SSL', '1')
+def test_tls_escape_hatch_requires_flag(monkeypatch):
+    monkeypatch.setattr(config.settings, 'mavat_insecure_ssl', True)
     ctx = _LegacySSLAdapter().poolmanager.connection_pool_kw['ssl_context']
     assert ctx.verify_mode == ssl.CERT_NONE
 

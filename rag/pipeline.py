@@ -4,7 +4,7 @@ import re
 import threading
 from pathlib import Path
 
-from config import CHUNK_OVERLAP, CHUNK_SIZE, EMBEDDING_MODEL, RRF_K, TOP_K
+from config import settings
 from processing.chunker import chunk_text
 from processing.cleaner import clean_text
 from processing.synonyms import expand_words
@@ -79,7 +79,7 @@ def _rerank(question: str, chunks: list[str]) -> list[str]:
     return [c for _, c in indexed]
 
 
-def _reciprocal_rank_fusion(ranked_lists: list[list[str]], k: int = RRF_K) -> list[str]:
+def _reciprocal_rank_fusion(ranked_lists: list[list[str]], k: int = 60) -> list[str]:
     """
     Merge several best-first ranked lists into one via Reciprocal Rank Fusion.
 
@@ -111,18 +111,18 @@ class RAGPipeline:
         embedder:  object with .encode(texts, is_query=False) — injected in
                    tests; defaults to the SentenceTransformer-backed Embedder
                    (imported lazily so importing this module never loads torch).
-        store_dir: directory for the persisted FAISS store + manifest.
-        index_dir: directory for the persisted Whoosh keyword index.
+        store_dir: FAISS store + manifest dir (defaults to settings.vector_store_dir).
+        index_dir: Whoosh keyword index dir (defaults to settings.index_dir).
     """
 
-    def __init__(self, embedder=None, store_dir: str = 'vector_store', index_dir: str = 'indexdir'):
+    def __init__(self, embedder=None, store_dir: str | None = None, index_dir: str | None = None):
         if embedder is None:
             from embeddings.embedder import Embedder  # lazy: pulls in torch
-            embedder = Embedder(EMBEDDING_MODEL)
+            embedder = Embedder(settings.embedding_model, batch_size=settings.embedding_batch_size)
         self.embedder = embedder
-        self.store_dir = Path(store_dir)
+        self.store_dir = Path(store_dir or settings.vector_store_dir)
         self.vector_store = None
-        self.keyword_search = KeywordSearch(index_dir)
+        self.keyword_search = KeywordSearch(index_dir or settings.index_dir)
         # Serializes all index mutation: concurrent FAISS adds are not
         # thread-safe and Whoosh allows a single writer (LockError otherwise).
         self.index_lock = threading.Lock()
@@ -137,6 +137,13 @@ class RAGPipeline:
         except Exception:
             logger.exception("Vector store load failed; starting without it")
             self.vector_store = None
+
+    def warmup(self) -> None:
+        """Eagerly load the embedding model (called at API startup so /health
+        readiness reflects a resident model). No-op for embedders without it."""
+        warm = getattr(self.embedder, "warmup", None)
+        if callable(warm):
+            warm()
 
     # ------------------------------------------------------------------
     # Indexed-files manifest (dedup for incremental indexing)
@@ -195,7 +202,7 @@ class RAGPipeline:
             from ingestion.ocr_pipeline import ocr_image
             text = ocr_image(str(fp))
         cleaned = clean_text(text)
-        chunks = chunk_text(cleaned, chunk_size=CHUNK_SIZE, overlap=CHUNK_OVERLAP)
+        chunks = chunk_text(cleaned, chunk_size=settings.chunk_size, overlap=settings.chunk_overlap)
         return [f"[{fp.name}] " + c for c in chunks]
 
     def index_new_files(self, file_paths: list) -> int:
@@ -271,16 +278,16 @@ class RAGPipeline:
         q_emb = self.embedder.encode([question], is_query=True)
         vector_results = []
         if self.vector_store is not None:
-            vector_results = self.vector_store.search(q_emb, TOP_K)
+            vector_results = self.vector_store.search(q_emb, settings.top_k)
 
         # KeywordSearch applies synonym expansion itself (per-word OR groups);
         # passing a pre-expanded question would double-expand and pollute the
         # high-precision AND query.
-        keyword_results = self.keyword_search.search(question, top_k=TOP_K)
+        keyword_results = self.keyword_search.search(question, top_k=settings.top_k)
 
         # Fuse the two ranked lists with Reciprocal Rank Fusion: chunks both
         # retrievers rank highly rise above chunks only one list surfaces.
-        return _reciprocal_rank_fusion([vector_results, keyword_results], RRF_K)
+        return _reciprocal_rank_fusion([vector_results, keyword_results], settings.rrf_k)
 
     def query_with_answer(self, question: str) -> dict:
         """

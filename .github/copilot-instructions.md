@@ -48,7 +48,7 @@ api/app.py         ← FastAPI: GET+POST /query, POST /download, static file ser
 
 ## Key Conventions
 
-- **All tunable constants live in `config.py`** (`EMBEDDING_MODEL`, `CHUNK_SIZE`, `CHUNK_OVERLAP`, `TOP_K`, `RAW_DIR`), imported explicitly where needed.
+- **All tunables live in `config.py`** as fields on a pydantic-settings `Settings` object; use `from config import settings` and read `settings.<field>`. Every field is env-overridable (`TOP_K`, `EMBEDDING_BATCH_SIZE`, `LLAMACPP_URL`, `API_TOKEN`, `MAVAT_INSECURE_SSL`, …) or via `.env`. The embedder is lazy (model loads on first `encode()`/`warmup()`); the API `warmup()`s it at startup.
 
 - **Chunk provenance prefix**: `scripts/build_index_all.py` and `downloader/` both prepend `[filename]` to every chunk (e.g. `[45.pdf] chunk text...`). The API strips this prefix and resolves `source` URLs from it. Maintain this pattern when adding ingestion scripts.
 

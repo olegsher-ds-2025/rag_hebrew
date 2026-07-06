@@ -18,6 +18,8 @@ services:
       - LLAMACPP_URL=http://host.docker.internal:8080/completion
       # Optional: set to require the X-API-Token header on POST /download.
       # - API_TOKEN=change-me
+      # Any config.py Settings field is overridable here. On a 4 GB Orin Nano:
+      # - EMBEDDING_BATCH_SIZE=8
     healthcheck:
       # /health returns 503 until the embedding model finishes loading.
       test: ["CMD", "python", "-c", "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://localhost:9000/health', timeout=5).status==200 else 1)"]

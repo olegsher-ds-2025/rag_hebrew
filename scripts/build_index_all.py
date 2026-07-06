@@ -5,7 +5,7 @@ from pathlib import Path
 # make project importable
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from config import CHUNK_OVERLAP, CHUNK_SIZE, RAW_DIR
+from config import settings
 from ingestion.ocr_pipeline import ocr_image
 from ingestion.pdf_loader import extract_text_from_pdf
 from processing.chunker import chunk_text
@@ -14,7 +14,7 @@ from rag.pipeline import RAGPipeline
 
 
 def build_index_all():
-    raw = Path(RAW_DIR)
+    raw = Path(settings.raw_dir)
     if not raw.exists():
         print(f"Raw dir not found: {raw}")
         return
@@ -34,7 +34,7 @@ def build_index_all():
                 text = ocr_image(str(f))
 
             cleaned = clean_text(text)
-            chunks = chunk_text(cleaned, chunk_size=CHUNK_SIZE, overlap=CHUNK_OVERLAP)
+            chunks = chunk_text(cleaned, chunk_size=settings.chunk_size, overlap=settings.chunk_overlap)
             # prefix chunks with filename to preserve provenance
             prefixed = [f"[{f.name}] " + c for c in chunks]
             all_chunks.extend(prefixed)

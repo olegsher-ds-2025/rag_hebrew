@@ -1,5 +1,4 @@
 import logging
-import os
 import sys
 import threading
 from contextlib import asynccontextmanager
@@ -11,6 +10,7 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+from config import settings
 from downloader.manager import DownloadManager
 from rag.pipeline import RAGPipeline
 
@@ -31,6 +31,7 @@ async def lifespan(app: FastAPI):
     if getattr(app.state, "rag", None) is None:
         logger.info("Loading RAG pipeline (embedding model)...")
         app.state.rag = RAGPipeline()
+        app.state.rag.warmup()   # load the model now so /health reflects readiness
         n = len(app.state.rag.vector_store.texts) if app.state.rag.vector_store else 0
         logger.info("RAG pipeline ready (%d indexed chunks)", n)
     if getattr(app.state, "download_manager", None) is None:
@@ -97,7 +98,7 @@ class DownloadRequest(BaseModel):
 
 # Optional shared-secret protection for the write/network-triggering endpoint.
 # Set API_TOKEN in the environment to require an X-API-Token header on /download.
-API_TOKEN = os.getenv("API_TOKEN", "")
+API_TOKEN = settings.api_token
 
 
 def require_api_token(x_api_token: str = Header(default="")):

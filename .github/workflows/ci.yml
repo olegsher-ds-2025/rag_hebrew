@@ -21,7 +21,7 @@ jobs:
       - name: Install test dependencies
         run: |
           pip install numpy "faiss-cpu>=1.8,<2" whoosh fastapi uvicorn httpx \
-                      requests pymupdf pydantic pytest pytest-cov ruff
+                      requests pymupdf pydantic pydantic-settings pytest pytest-cov ruff
 
       - name: Lint (ruff)
         run: ruff check .

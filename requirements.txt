@@ -20,6 +20,9 @@ whoosh==2.7.4
 fastapi>=0.110,<1
 uvicorn>=0.29,<1
 
+# Config
+pydantic-settings>=2,<3
+
 # Utilities
 python-dotenv>=1,<2
 requests>=2.31,<3

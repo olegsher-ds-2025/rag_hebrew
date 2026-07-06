@@ -5,7 +5,7 @@ from pathlib import Path
 # ensure project root is importable
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from config import CHUNK_OVERLAP, CHUNK_SIZE, RAW_DIR
+from config import settings
 from ingestion.pdf_loader import extract_text_from_pdf
 from processing.chunker import chunk_text
 from processing.cleaner import clean_text
@@ -13,7 +13,7 @@ from rag.pipeline import RAGPipeline
 
 
 def build_and_query(file_name, queries):
-    file_path = Path(RAW_DIR) / file_name
+    file_path = Path(settings.raw_dir) / file_name
     print(f"Loading: {file_path}")
 
     text = extract_text_from_pdf(str(file_path))
@@ -22,7 +22,7 @@ def build_and_query(file_name, queries):
     cleaned = clean_text(text)
     print(f"Cleaned length: {len(cleaned)} characters")
 
-    chunks = chunk_text(cleaned, chunk_size=CHUNK_SIZE, overlap=CHUNK_OVERLAP)
+    chunks = chunk_text(cleaned, chunk_size=settings.chunk_size, overlap=settings.chunk_overlap)
     print(f"Created {len(chunks)} chunks (first 2 shown):\n", chunks[:2])
 
     rag = RAGPipeline()

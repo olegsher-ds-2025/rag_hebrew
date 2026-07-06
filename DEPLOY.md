@@ -67,6 +67,11 @@ If your llama-server listens on a different host/port, override `LLAMACPP_URL`
 `docker-compose.yml`. The app uses llama.cpp's **native** `/completion`
 streaming endpoint, not the OpenAI-compatible `/v1` one.
 
+**Every setting is env-overridable.** All tunables are fields on the
+`config.py` `Settings` object; set the matching env var (container `environment:`
+or a `.env` file — see `.env.example`). Useful on a memory-tight Orin Nano:
+`EMBEDDING_BATCH_SIZE=8` (smaller embedding batches), `TOP_K`, `API_TOKEN`.
+
 ## Indexing documents
 
 Persisted indices live in mounted volumes (`vector_store/`, `indexdir/`) so they
