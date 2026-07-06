@@ -4,7 +4,7 @@ import re
 import threading
 from pathlib import Path
 
-from config import CHUNK_OVERLAP, CHUNK_SIZE, EMBEDDING_MODEL, TOP_K
+from config import CHUNK_OVERLAP, CHUNK_SIZE, EMBEDDING_MODEL, RRF_K, TOP_K
 from processing.chunker import chunk_text
 from processing.cleaner import clean_text
 from processing.synonyms import expand_words
@@ -77,6 +77,24 @@ def _rerank(question: str, chunks: list[str]) -> list[str]:
 
     indexed = sorted(enumerate(chunks), key=lambda iv: score(iv[1]), reverse=True)
     return [c for _, c in indexed]
+
+
+def _reciprocal_rank_fusion(ranked_lists: list[list[str]], k: int = RRF_K) -> list[str]:
+    """
+    Merge several best-first ranked lists into one via Reciprocal Rank Fusion.
+
+    Each item scores sum(1 / (k + rank)) over the lists it appears in (rank
+    starts at 1), so a chunk both retrievers rank highly beats a chunk that only
+    one list ranks first. Items are returned unique, highest-scored first; ties
+    keep first-seen order (the earlier list wins), which preserves the previous
+    vector-before-keyword precedence as a tie-breaker.
+    """
+    scores: dict[str, float] = {}
+    for ranked in ranked_lists:
+        for rank, item in enumerate(ranked, start=1):
+            scores[item] = scores.get(item, 0.0) + 1.0 / (k + rank)
+    # dict preserves first-insertion order; sorted() is stable → ties hold it.
+    return sorted(scores, key=scores.get, reverse=True)
 
 
 def _file_signature(fp: Path) -> dict:
@@ -260,8 +278,9 @@ class RAGPipeline:
         # high-precision AND query.
         keyword_results = self.keyword_search.search(question, top_k=TOP_K)
 
-        # Merge: vector results first (semantic relevance), then keyword hits
-        return list(dict.fromkeys(vector_results + keyword_results))
+        # Fuse the two ranked lists with Reciprocal Rank Fusion: chunks both
+        # retrievers rank highly rise above chunks only one list surfaces.
+        return _reciprocal_rank_fusion([vector_results, keyword_results], RRF_K)
 
     def query_with_answer(self, question: str) -> dict:
         """

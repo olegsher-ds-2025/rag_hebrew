@@ -54,7 +54,7 @@ api/app.py         ← FastAPI: GET+POST /query, POST /download, static file ser
 
 - **Hebrew text preservation**: `processing/cleaner.py` keeps Unicode range `\u0590-\u05FF` explicitly alongside `\w`, `/`, `-`, `.`. Extend the regex carefully to avoid dropping Hebrew characters.
 
-- **Hybrid deduplication**: `RAGPipeline.query()` merges vector and keyword results with `dict.fromkeys(...)` — order matters (vector results first). The combined list is returned directly as chunk strings to the API.
+- **Hybrid fusion (RRF)**: `RAGPipeline.query()` merges the vector and keyword ranked lists with `_reciprocal_rank_fusion` (score `Σ 1/(RRF_K + rank)`, `RRF_K` in `config.py`); chunks both retrievers rank highly rise to the top, with vector-before-keyword order as the tie-breaker. `query_with_answer()` then applies `_rerank` (plot/number heuristics).
 
 - **Embedding model**: `intfloat/multilingual-e5-large` (multilingual, 1024-dim), set in `config.py`. The embedder auto-prepends E5 task prefixes (`query: ` / `passage: `). The Dockerfile pre-bakes the model into the image layer.
 

@@ -14,7 +14,7 @@ data/raw/ (PDF/image)
   → processing  clean Hebrew text → sentence-aware chunking
   → embeddings  intfloat/multilingual-e5-large (query:/passage: prefixing)
   → index       FAISS IndexFlatIP over normalized embeddings — cosine (semantic) + Whoosh BM25 (keyword)
-  → retrieval   hybrid merge → synonym expansion → plot/number rerank
+  → retrieval   RRF fusion of vector+keyword → synonym expansion → plot/number rerank
   → generation  streaming llama.cpp /completion → concise Hebrew answer
   → api         FastAPI + minimal RTL web UI (port 9000)
 ```
@@ -84,9 +84,11 @@ valid), so the API is queryable on startup without re-indexing.
   ingestion path.
 - **Hebrew preservation**: the cleaner regex explicitly keeps `֐-׿`. Edit it carefully
   so Hebrew characters are never dropped.
-- **Hybrid dedup order matters**: `query()` merges with `dict.fromkeys(vector_results + keyword_results)`
-  — vector (semantic) results come first. `_rerank` then boosts chunks where query numbers sit
-  adjacent to plot terms (תא שטח / מגרש / חלקה) and rewards explicit "size of plot N" patterns.
+- **Hybrid fusion is RRF**: `query()` merges the vector and keyword ranked lists with
+  `_reciprocal_rank_fusion` (score `Σ 1/(RRF_K + rank)`), so chunks both retrievers rank
+  highly win; ties keep vector-before-keyword order. `_rerank` then runs as a second stage,
+  boosting chunks where query numbers sit adjacent to plot terms (תא שטח / מגרש / חלקה) and
+  rewarding explicit "size of plot N" patterns. `RRF_K` lives in `config.py`.
 - **Synonyms live in ONE place**: `PLANNING_SYNONYMS` in
   [processing/synonyms.py](processing/synonyms.py); both keyword search and rerank import
   it. Add terms there only.
