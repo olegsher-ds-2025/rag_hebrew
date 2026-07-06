@@ -131,10 +131,14 @@ def _build_prompt(question: str, chunks: list[str]) -> str:
     return PROMPT_TEMPLATE.format(context=context, question=question)
 
 
-def generate_answer(question: str, chunks: list[str]) -> str:
+def generate_answer(question: str, chunks: list[str]) -> str | None:
     """
     Stream a response from llama-server to avoid read-timeout on slower models.
-    Returns the generated answer, or empty string on failure.
+
+    Returns:
+        The generated answer ("" when there was nothing to ask about), or
+        None when the LLM itself was unreachable/failed — callers use this to
+        show a clear "model unavailable" message instead of a silent blank.
     """
     if not chunks:
         return ""
@@ -193,13 +197,13 @@ def generate_answer(question: str, chunks: list[str]) -> str:
 
     except requests.exceptions.ConnectionError as exc:
         logger.error("[llama.cpp] Connection failed (is llama-server running at %s?): %s", LLAMACPP_URL, exc)
-        return ""
+        return None
     except requests.exceptions.Timeout as exc:
         logger.error("[llama.cpp] Request timed out (connect=%ss, read=%ss): %s", LLAMACPP_TIMEOUT[0], LLAMACPP_TIMEOUT[1], exc)
-        return ""
+        return None
     except requests.exceptions.HTTPError as exc:
         logger.error("[llama.cpp] HTTP error %s: %s", resp.status_code, exc)
-        return ""
+        return None
     except Exception as exc:
         logger.error("[llama.cpp] Unexpected error: %s", exc)
-        return ""
+        return None

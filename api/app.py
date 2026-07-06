@@ -2,10 +2,12 @@ from pathlib import Path
 import sys
 import logging
 import os
+import threading
+from contextlib import asynccontextmanager
 
 from fastapi import Depends, FastAPI, Header, HTTPException
 from pydantic import BaseModel, Field
-from fastapi.responses import HTMLResponse
+from fastapi.responses import HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
@@ -15,16 +17,43 @@ from downloader.manager import DownloadManager
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-app = FastAPI()
-rag = RAGPipeline()
-download_manager = DownloadManager()
+# Only one /download may run at a time: it drives network fetches plus heavy
+# embedding/indexing work, and a second concurrent run would fight over the
+# same stores. Non-blocking acquire → 409 for the loser.
+_download_lock = threading.Lock()
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    # Load the heavy pieces at startup (not import time): the embedding model
+    # takes a while on the Jetson, and /health reports readiness meanwhile.
+    # Tests inject fakes by setting app.state.rag before startup.
+    if getattr(app.state, "rag", None) is None:
+        logger.info("Loading RAG pipeline (embedding model)...")
+        app.state.rag = RAGPipeline()
+        n = len(app.state.rag.vector_store.texts) if app.state.rag.vector_store else 0
+        logger.info("RAG pipeline ready (%d indexed chunks)", n)
+    if getattr(app.state, "download_manager", None) is None:
+        app.state.download_manager = DownloadManager()
+    yield
+
+
+app = FastAPI(lifespan=lifespan)
 
 # serve static JS from api/static
 static_dir = Path(__file__).resolve().parent / "static"
 app.mount("/static", StaticFiles(directory=static_dir), name="static")
 # serve raw documents under /files
 raw_dir = Path(__file__).resolve().parents[1] / 'data' / 'raw'
+raw_dir.mkdir(parents=True, exist_ok=True)
 app.mount("/files", StaticFiles(directory=raw_dir), name="files")
+
+
+def _get_rag() -> RAGPipeline:
+    rag = getattr(app.state, "rag", None)
+    if rag is None:
+        raise HTTPException(status_code=503, detail="pipeline is still loading")
+    return rag
 
 
 def _safe_source(fname: str) -> str | None:
@@ -42,7 +71,7 @@ def _safe_source(fname: str) -> str | None:
 
 def _format_query_response(q: str) -> dict:
     logger.info("[server] query q=%r", q)
-    result = rag.query_with_answer(q)
+    result = _get_rag().query_with_answer(q)
     formatted = []
     for r in result["chunks"]:
         source = None
@@ -76,21 +105,39 @@ def require_api_token(x_api_token: str = Header(default="")):
         raise HTTPException(status_code=401, detail="invalid or missing X-API-Token")
 
 
+@app.get("/health")
+def health():
+    rag = getattr(app.state, "rag", None)
+    if rag is None:
+        return JSONResponse({"status": "starting"}, status_code=503)
+    return {
+        "status": "ok",
+        "indexed_chunks": len(rag.vector_store.texts) if rag.vector_store else 0,
+        "keyword_docs": rag.keyword_search.doc_count(),
+    }
+
+
 @app.post("/download", dependencies=[Depends(require_api_token)])
 def download_and_index(req: DownloadRequest):
     logger.info("[server] POST /download plan_name=%r", req.plan_name)
-    downloaded, log, metadata = download_manager.download(req.plan_name)
+    rag = _get_rag()
+    if not _download_lock.acquire(blocking=False):
+        raise HTTPException(status_code=409, detail="הורדה אחרת כבר רצה — נסה שוב בעוד רגע")
+    try:
+        downloaded, log, metadata = app.state.download_manager.download(req.plan_name)
 
-    # Index the plan's basic info (status, area, dates) — works even when the
-    # PDFs are reCAPTCHA-gated and could not be downloaded.
-    meta_indexed = rag.index_texts(metadata)
-    if meta_indexed:
-        log.append(f"אונדקס מידע בסיסי ({meta_indexed} קטעים) מדף התכנית")
+        # Index the plan's basic info (status, area, dates) — works even when the
+        # PDFs are reCAPTCHA-gated and could not be downloaded.
+        meta_indexed = rag.index_texts(metadata)
+        if meta_indexed:
+            log.append(f"אונדקס מידע בסיסי ({meta_indexed} קטעים) מדף התכנית")
 
-    indexed = rag.index_new_files(downloaded) if downloaded else 0
-    names = [p.name for p in downloaded]
-    if downloaded:
-        log.append(f"אונדקסו {indexed} קטעים מ-{len(names)} קבצים")
+        indexed = rag.index_new_files(downloaded) if downloaded else 0
+        names = [p.name for p in downloaded]
+        if downloaded:
+            log.append(f"אונדקסו {indexed} קטעים מ-{len(names)} קבצים")
+    finally:
+        _download_lock.release()
 
     logger.info("[server] download: %d file(s), %d doc chunks, %d metadata chunks indexed",
                 len(names), indexed, meta_indexed)

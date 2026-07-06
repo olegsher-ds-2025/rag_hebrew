@@ -28,10 +28,12 @@ SITES_CSV = Path(__file__).parent / "sites.csv"
 class DownloadManager:
     def __init__(self, dest_dir: Path | None = None):
         self.dest_dir = dest_dir or Path("data/raw")
-        self._downloaders = self._load_downloaders()
+        self._downloader_classes = self._load_downloader_classes()
 
-    def _load_downloaders(self) -> list:
-        downloaders = []
+    def _load_downloader_classes(self) -> list:
+        """Read sites.csv once; downloader INSTANCES are created per download()
+        call, so concurrent requests never share mutable log/session state."""
+        classes = []
         with open(SITES_CSV, newline="", encoding="utf-8") as fh:
             reader = csv.DictReader(fh)
             for row in reader:
@@ -42,8 +44,8 @@ class DownloadManager:
                 if cls is None:
                     logger.warning("Unknown downloader type %r (site %r) — skipping", site_type, row.get("name"))
                     continue
-                downloaders.append((row["name"], cls()))
-        return downloaders
+                classes.append((row["name"], cls))
+        return classes
 
     def download(self, plan_name: str) -> tuple[list[Path], list[str], list[str]]:
         """
@@ -56,7 +58,8 @@ class DownloadManager:
         all_files: list[Path] = []
         all_log: list[str] = []
         all_metadata: list[str] = []
-        for site_name, downloader in self._downloaders:
+        for site_name, cls in self._downloader_classes:
+            downloader = cls()
             logger.info("Downloading from site=%s plan_name=%r", site_name, plan_name)
             try:
                 files = downloader.download(plan_name, self.dest_dir)

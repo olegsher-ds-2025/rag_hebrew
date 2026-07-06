@@ -19,6 +19,7 @@ from urllib.parse import quote
 
 import requests
 from requests.adapters import HTTPAdapter
+from urllib3.util.retry import Retry
 from urllib3.util.ssl_ import create_urllib3_context
 
 from downloader.base_downloader import BaseDownloader
@@ -69,7 +70,15 @@ class MavatDownloader(BaseDownloader):
         # inside the container: SSLV3_ALERT_HANDSHAKE_FAILURE). The legacy adapter
         # lowers SECLEVEL so the handshake succeeds. Mount it ONLY for those hosts
         # so every other https request keeps default TLS policy.
-        adapter = _LegacySSLAdapter()
+        # Gov endpoints are flaky ("may be under maintenance") — retry transient
+        # failures with backoff instead of failing the whole download run.
+        retry = Retry(
+            total=3,
+            backoff_factor=1,
+            status_forcelist=[429, 500, 502, 503, 504],
+            allowed_methods=["GET"],
+        )
+        adapter = _LegacySSLAdapter(max_retries=retry)
         self.session.mount("https://ags.iplan.gov.il", adapter)
         self.session.mount("https://mavat.iplan.gov.il", adapter)
         self.log: list[str] = []

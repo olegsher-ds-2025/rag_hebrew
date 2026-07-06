@@ -1,6 +1,7 @@
 import json
 import logging
 import re
+import threading
 from pathlib import Path
 
 from config import CHUNK_OVERLAP, CHUNK_SIZE, EMBEDDING_MODEL, TOP_K
@@ -104,6 +105,9 @@ class RAGPipeline:
         self.store_dir = Path(store_dir)
         self.vector_store = None
         self.keyword_search = KeywordSearch(index_dir)
+        # Serializes all index mutation: concurrent FAISS adds are not
+        # thread-safe and Whoosh allows a single writer (LockError otherwise).
+        self.index_lock = threading.Lock()
 
         # try to load persisted vector store if present
         try:
@@ -148,18 +152,19 @@ class RAGPipeline:
         """
         embeddings = self.embedder.encode(chunks)
 
-        self.vector_store = VectorStore()
-        self.vector_store.add(embeddings, chunks)
-        self.vector_store.save(self.store_dir)
+        with self.index_lock:
+            self.vector_store = VectorStore()
+            self.vector_store.add(embeddings, chunks)
+            self.vector_store.save(self.store_dir)
 
-        self.keyword_search.clear()
-        self.keyword_search.add_docs(chunks)
+            self.keyword_search.clear()
+            self.keyword_search.add_docs(chunks)
 
-        manifest = {}
-        for fp in source_files or []:
-            fp = Path(fp)
-            manifest[fp.name] = _file_signature(fp)
-        self._save_manifest(manifest)
+            manifest = {}
+            for fp in source_files or []:
+                fp = Path(fp)
+                manifest[fp.name] = _file_signature(fp)
+            self._save_manifest(manifest)
 
     def _extract_file_chunks(self, fp: Path) -> list[str]:
         """Extract, clean and chunk one PDF/image file; chunks carry the [filename] prefix."""
@@ -214,15 +219,16 @@ class RAGPipeline:
         if not chunks:
             return 0
 
-        # Append to FAISS store (create new store if none exists yet)
         embeddings = self.embedder.encode(chunks)
-        if self.vector_store is None:
-            self.vector_store = VectorStore()
-        self.vector_store.add(embeddings, chunks)
-        self.vector_store.save(self.store_dir)
+        with self.index_lock:
+            # Append to FAISS store (create new store if none exists yet)
+            if self.vector_store is None:
+                self.vector_store = VectorStore()
+            self.vector_store.add(embeddings, chunks)
+            self.vector_store.save(self.store_dir)
 
-        # Append to Whoosh keyword index
-        self.keyword_search.add_docs(chunks)
+            # Append to Whoosh keyword index
+            self.keyword_search.add_docs(chunks)
 
         return len(chunks)
 
@@ -283,6 +289,10 @@ class RAGPipeline:
             reranked = [c for c in reranked if plan_num in c]
 
         answer = generate_answer(question, reranked)
+
+        if answer is None:
+            # LLM unreachable/failed — say so explicitly instead of a blank box.
+            return {"answer": "שגיאה: מודל השפה אינו זמין כרגע", "chunks": reranked}
 
         # If the LLM explicitly said it has no relevant data, suppress the answer
         # and return "אין תשובה" so the UI does not show speculative content.

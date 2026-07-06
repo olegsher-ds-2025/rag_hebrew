@@ -16,3 +16,15 @@ services:
       - PYTHONUNBUFFERED=1
       # llama-server's native completion endpoint on the Jetson host (port 8080).
       - LLAMACPP_URL=http://host.docker.internal:8080/completion
+      # Optional: set to require the X-API-Token header on POST /download.
+      # - API_TOKEN=change-me
+    healthcheck:
+      # /health returns 503 until the embedding model finishes loading.
+      test: ["CMD", "python", "-c", "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://localhost:9000/health', timeout=5).status==200 else 1)"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 180s   # model load on the Jetson takes a while
+    # On a 4 GB Orin Nano consider capping memory so an embedding spike gets
+    # this container OOM-killed (and restarted) instead of freezing the host:
+    # mem_limit: 3g
