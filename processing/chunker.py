@@ -21,6 +21,13 @@ def chunk_text(text: str, chunk_size: int = 800, overlap: int = 200) -> list[str
     Sentence-aware chunking: split on sentence/paragraph boundaries, then
     group sentences into chunks of ~chunk_size chars with overlap carry-over.
     """
+    if chunk_size <= 0:
+        raise ValueError(f"chunk_size must be positive, got {chunk_size}")
+    if not 0 <= overlap < chunk_size:
+        raise ValueError(
+            f"overlap must satisfy 0 <= overlap < chunk_size, got overlap={overlap}, chunk_size={chunk_size}"
+        )
+
     sentences = _split_sentences(text)
     if not sentences:
         return [text[:chunk_size]] if text.strip() else []

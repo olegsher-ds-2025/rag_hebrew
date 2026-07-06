@@ -14,7 +14,7 @@ data/raw/ (PDF/image)
   → ingestion   PyMuPDF text extraction, Tesseract (heb) OCR fallback
   → processing  clean Hebrew text → sentence-aware chunking
   → embeddings  intfloat/multilingual-e5-large (query:/passage: prefixing)
-  → index       FAISS IndexFlatL2 (semantic) + Whoosh BM25 (keyword)
+  → index       FAISS IndexFlatIP over normalized embeddings — cosine (semantic) + Whoosh BM25 (keyword)
   → retrieval   hybrid merge → synonym expansion → plot/number rerank
   → generation  streaming llama.cpp /completion → concise Hebrew answer
   → api         FastAPI + minimal RTL web UI (port 9000)
@@ -52,7 +52,7 @@ There are **no automated tests**. `scripts/query_helper.py` is the manual smoke 
 | [processing/cleaner.py](processing/cleaner.py) | Normalize whitespace; regex keeps Hebrew `֐-׿`, `\w`, and `/ - .` so IDs like `306/02/6` survive |
 | [processing/chunker.py](processing/chunker.py) | **Sentence-aware** chunking: split on page/paragraph/sentence boundaries, group to ~`CHUNK_SIZE` chars with `CHUNK_OVERLAP` carry-over |
 | [embeddings/embedder.py](embeddings/embedder.py) | `SentenceTransformer` wrapper; applies E5 `query:`/`passage:` prefixes when `"e5"` is in the model name |
-| [storage/vector_store.py](storage/vector_store.py) | FAISS `IndexFlatL2`; persists `index.faiss` + `texts.json` to `vector_store/` |
+| [storage/vector_store.py](storage/vector_store.py) | FAISS `IndexFlatIP` over unit-normalized embeddings (cosine); persists `index.faiss` + `texts.json` + `meta.json` to `vector_store/` (atomic writes, validated on load) |
 | [retrieval/hybrid_search.py](retrieval/hybrid_search.py) | Whoosh BM25 in `indexdir/`; Hebrew synonym expansion, tries AND-group then falls back to OR-group |
 | [rag/pipeline.py](rag/pipeline.py) | Orchestration: query synonym expansion, hybrid merge, `_rerank` (plot/number scoring), `build_index` / `index_new_files` / `query` / `query_with_answer` |
 | [rag/generator.py](rag/generator.py) | Streams from llama.cpp native `/completion`; Hebrew planning prompt template, strips `[filename]` prefixes from context |

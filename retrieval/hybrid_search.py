@@ -1,42 +1,42 @@
-from whoosh.index import create_in, open_dir
-from whoosh.fields import Schema, TEXT
-from whoosh.qparser import QueryParser, OrGroup, AndGroup
 import os
 
-# Common Hebrew planning term synonyms for query expansion
-PLANNING_SYNONYMS: dict[str, list[str]] = {
-    'פלוט':    ['מגרש', 'חלקה', 'תא שטח'],
-    'פלות':    ['מגרשים', 'חלקות', 'תאי שטח'],
-    'מגרש':    ['פלוט', 'חלקה', 'תא שטח'],
-    'מגרשים':  ['פלות', 'חלקות', 'תאי שטח'],
-    'חלקה':    ['פלוט', 'מגרש', 'תא שטח'],
-    'חלקות':   ['פלות', 'מגרשים', 'תאי שטח'],
-    'שטח':     ['גודל', 'מר', 'דונם'],
-    'גודל':    ['שטח', 'מידות'],
-    'בנין':    ['מבנה', 'בניין'],
-    'קומות':   ['מפלסים', 'קומה'],
-    'יחידות':  ['דירות', 'יחידות דיור'],
-    'גובה':    ['גובה מבנה'],
-}
+from whoosh.fields import TEXT, Schema
+from whoosh.index import create_in, open_dir
+from whoosh.qparser import AndGroup, OrGroup, QueryParser
+
+from processing.synonyms import PLANNING_SYNONYMS
+
+
+def _as_query_term(term: str) -> str:
+    """Quote multi-word synonyms so Whoosh parses them as phrases, not two loose tokens."""
+    return f'"{term}"' if ' ' in term else term
 
 
 class KeywordSearch:
-    def __init__(self):
-        schema = Schema(content=TEXT(stored=True))
-        os.makedirs("indexdir", exist_ok=True)
+    def __init__(self, index_dir: str = "indexdir"):
+        self.index_dir = index_dir
+        self.schema = Schema(content=TEXT(stored=True))
+        os.makedirs(index_dir, exist_ok=True)
         try:
-            if os.listdir("indexdir"):
-                self.ix = open_dir("indexdir")
+            if os.listdir(index_dir):
+                self.ix = open_dir(index_dir)
             else:
-                self.ix = create_in("indexdir", schema)
+                self.ix = create_in(index_dir, self.schema)
         except Exception:
-            self.ix = create_in("indexdir", schema)
+            self.ix = create_in(index_dir, self.schema)
 
     def add_docs(self, texts: list[str]) -> None:
         writer = self.ix.writer()
         for t in texts:
             writer.add_document(content=t)
         writer.commit()
+
+    def clear(self) -> None:
+        """Drop all indexed documents (used by full rebuilds to stay in sync with FAISS)."""
+        self.ix = create_in(self.index_dir, self.schema)
+
+    def doc_count(self) -> int:
+        return self.ix.doc_count()
 
     def _expand(self, query_str: str) -> str:
         """Expand query terms with Hebrew planning synonyms."""
@@ -45,7 +45,8 @@ class KeywordSearch:
         for w in words:
             syns = PLANNING_SYNONYMS.get(w)
             if syns:
-                expanded.append('(' + ' OR '.join([w] + syns) + ')')
+                terms = [_as_query_term(t) for t in [w] + syns]
+                expanded.append('(' + ' OR '.join(terms) + ')')
             else:
                 expanded.append(w)
         return ' '.join(expanded)

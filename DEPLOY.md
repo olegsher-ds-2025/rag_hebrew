@@ -92,3 +92,13 @@ docker compose exec app python scripts/build_index_all.py
   or switch `EMBEDDING_MODEL` in `config.py` to a smaller multilingual model.
 - **Build fails on torch/faiss wheels:** build natively on the Jetson (arm64);
   ensure enough RAM/swap during `pip install`.
+
+## Index rebuild after upgrading
+
+The vector store format changed (cosine metric over normalized embeddings,
+`meta.json` version marker). Old `vector_store/` contents are refused on load
+with a clear log message — rebuild once after upgrading:
+
+```bash
+docker compose exec app python scripts/build_index_all.py
+```

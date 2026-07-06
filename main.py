@@ -1,15 +1,22 @@
-from ingestion.pdf_loader import extract_text_from_pdf
-from processing.cleaner import clean_text
-from processing.chunker import chunk_text
+"""
+Quickstart demo: incrementally index one file and run a test query.
+
+Non-destructive — appends to the existing indices via index_new_files()
+(files already indexed are skipped). To rebuild everything from data/raw/,
+use scripts/build_index_all.py.
+"""
+
+import sys
+
 from rag.pipeline import RAGPipeline
 
-file_path = "data/raw/45.pdf"
 
-text = extract_text_from_pdf(file_path)
-text = clean_text(text)
-chunks = chunk_text(text)
+def main(file_path: str = "data/raw/45.pdf") -> None:
+    rag = RAGPipeline()
+    added = rag.index_new_files([file_path])
+    print(f"Indexed {added} new chunks from {file_path}")
+    print(rag.query("מה כתוב במסמך?"))
 
-rag = RAGPipeline()
-rag.build_index(chunks)
 
-print(rag.query("מה כתוב במסמך?"))
+if __name__ == "__main__":
+    main(*sys.argv[1:2])

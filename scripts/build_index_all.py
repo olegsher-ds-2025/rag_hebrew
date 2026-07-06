@@ -49,7 +49,7 @@ def build_index_all():
 
     rag = RAGPipeline()
     print("Building index from all chunks (this may take a while)...")
-    rag.build_index(all_chunks)
+    rag.build_index(all_chunks, source_files=files)
     print("Index built and persisted (vector_store + keyword index). Done.")
 
 

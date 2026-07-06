@@ -36,7 +36,7 @@ processing/        ← cleaner.py: normalise whitespace, strip non-Hebrew/non-AS
     ↓                  chunker.py: fixed-size sliding window (char-level)
 rag/pipeline.py    ← orchestrates embed → FAISS search + BM25 search → deduplicated results
     ↓                  build_index(): full rebuild | index_new_files(): incremental append
-storage/           ← vector_store.py: FAISS IndexFlatL2, persists to vector_store/
+storage/           ← vector_store.py: FAISS IndexFlatIP (cosine, normalized embeddings), persists to vector_store/
 retrieval/         ← hybrid_search.py: Whoosh BM25, index lives in indexdir/
 downloader/        ← manager.py: reads sites.csv, dispatches to site-specific downloaders
     ↓                  mavat_downloader.py: ArcGIS query + PDF download for iplan.gov.il
@@ -48,7 +48,7 @@ api/app.py         ← FastAPI: GET+POST /query, POST /download, static file ser
 
 ## Key Conventions
 
-- **All tunable constants live in `config.py`** (`EMBEDDING_MODEL`, `CHUNK_SIZE`, `CHUNK_OVERLAP`, `TOP_K`, `RAW_DIR`). The pipeline uses `from config import *`.
+- **All tunable constants live in `config.py`** (`EMBEDDING_MODEL`, `CHUNK_SIZE`, `CHUNK_OVERLAP`, `TOP_K`, `RAW_DIR`), imported explicitly where needed.
 
 - **Chunk provenance prefix**: `scripts/build_index_all.py` and `downloader/` both prepend `[filename]` to every chunk (e.g. `[45.pdf] chunk text...`). The API strips this prefix and resolves `source` URLs from it. Maintain this pattern when adding ingestion scripts.
 
